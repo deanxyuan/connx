@@ -99,6 +99,104 @@ int main() {
 }
 ```
 
+## Logging
+
+connx has its own internal logging for debugging and monitoring. By default, all logs are written to `stderr`. You do **not** need to configure anything to use connx.
+
+### Default Behavior (Zero Configuration)
+
+```c
+#include <connx/c.h>
+
+int main() {
+    // connx logs go to stderr automatically
+    // [INFO] connecting to example.com:8080
+    // [DEBUG] bytes sent: 1024
+    connx_client_t* client = connx_client_new();
+    connx_client_connect(client, "example.com:8080");
+}
+```
+
+### Redirecting connx Logs to Your Own Logger
+
+If you want to collect connx's internal logs (e.g., write to a file, send to a remote service, or integrate with your application's logging system), you can register a callback:
+
+```c
+#include <stdio.h>
+#include <connx/c.h>
+
+void my_log_handler(int level, int line, unsigned long threadid,
+                    const char* msg, void* userdata) {
+    FILE* fp = (FILE*)userdata;
+    fprintf(fp, "[connx] %s\n", msg);
+}
+
+int main() {
+    FILE* log_file = fopen("connx.log", "w");
+    
+    // Redirect connx logs to a file
+    connx_log_set_callback(my_log_handler, log_file);
+    
+    // Now connx logs go to connx.log instead of stderr
+    connx_client_t* client = connx_client_new();
+    // ...
+    
+    // Remove callback to restore default stderr output
+    connx_log_set_callback(NULL, NULL);
+    fclose(log_file);
+}
+```
+
+### Integration with C++ Logging Libraries
+
+connx logs are independent from your application's logging. You can easily forward them to libraries like **spdlog**, **glog**, or **Boost.Log**:
+
+```cpp
+#include <spdlog/spdlog.h>
+#include <connx/c.h>
+
+void spdlog_bridge(int level, int line, unsigned long threadid,
+                   const char* msg, void* userdata) {
+    auto* logger = static_cast<spdlog::logger*>(userdata);
+    
+    // msg is already formatted by connx, just forward it
+    switch (level) {
+        case CONNX_LOG_LEVEL_ERROR: logger->error("{}", msg); break;
+        case CONNX_LOG_LEVEL_WARN:  logger->warn("{}", msg);  break;
+        case CONNX_LOG_LEVEL_INFO:  logger->info("{}", msg);  break;
+        case CONNX_LOG_LEVEL_DEBUG: logger->debug("{}", msg); break;
+        case CONNX_LOG_LEVEL_TRACE: logger->trace("{}", msg); break;
+    }
+}
+
+int main() {
+    auto app_logger = spdlog::rotating_logger_mt("app", "app.log", 
+                                                  1024*1024*10, 3);
+    
+    // Your application uses spdlog directly (with compile-time formatting)
+    app_logger->info("user {} connected from {}", user_id, ip);
+    
+    // Forward connx's internal logs to the same file
+    connx_log_set_callback(spdlog_bridge, app_logger.get());
+    
+    connx_client_t* client = connx_client_new();
+    // Both app and connx logs now go to app.log
+}
+```
+
+### Important Notes
+
+- **The callback receives pre-formatted strings.** `msg` is a null-terminated string, ready to use. You do NOT need to call `printf` or format it again.
+
+- **Log level filtering happens before the callback.** If you set
+`connx_log_set_min_level(CONNX_LOG_LEVEL_WARN)`, your callback will only receive WARN and ERROR messages.
+
+- **The callback may be called from multiple threads.** Ensure your logging handler is thread-safe.
+
+- **Lifecycle management is your responsibility.** If you pass a pointer via userdata, ensure it remains valid until the callback is removed by calling `connx_log_set_callback(NULL, NULL)`.
+
+- **connx does NOT depend on any logging library.** The callback mechanism is pure C, with no external dependencies.
+
 ## Codec
 
 | Codec | Description |
