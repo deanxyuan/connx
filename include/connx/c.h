@@ -229,15 +229,14 @@ CONNX_API int connx_client_is_connected(const connx_client_t* client);
  * @brief Sends data to the connected remote host.
  *
  * This function queues the data for sending. It does not guarantee that the data has been sent
- * over the network upon return. The actual send completion can be tracked via a future API
- * (e.g., a write-complete callback).
+ * over the network upon return.
  *
  * @param client The client instance.
  * @param data Pointer to the data to send.
  * @param len Length of the data in bytes.
- * @return A unique request ID for this send operation, or -1 on error.
+ * @return 0 on success, or -1 on error.
  */
-CONNX_API int64_t connx_client_send_buffer(connx_client_t* client, const void* data, size_t len);
+CONNX_API int connx_client_send_buffer(connx_client_t* client, const void* data, size_t len);
 
 // ============================================================================
 // Observability

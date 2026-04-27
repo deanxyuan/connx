@@ -104,7 +104,7 @@ connx_error connx_blocking_resolve_address(const char* name, const char* default
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;     /* ipv4 or ipv6 */
     hints.ai_socktype = SOCK_STREAM; /* stream socket */
-    hints.ai_flags = AI_PASSIVE;     /* for wildcard IP address */
+    hints.ai_flags = 0;
 
     s = getaddrinfo(host.c_str(), port.c_str(), &hints, &result);
     if (s != 0) {

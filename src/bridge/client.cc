@@ -38,7 +38,7 @@ public:
     bool IsConnected() const override { return impl_->IsConnected(); }
 
     // --- Data Interaction ---
-    int64_t SendBuffer(const void* data, size_t size) override {
+    bool SendBuffer(const void* data, size_t size) override {
         if (data == nullptr || size == 0) {
             return false;
         }
@@ -50,6 +50,7 @@ public:
 };
 
 Client* CreateClient(ClientHandler* handler, const ClientOptions& opts) {
+    if (handler == nullptr) return nullptr;
     auto p = new ClientAdaptor();
     p->Init(handler, opts);
     return p;

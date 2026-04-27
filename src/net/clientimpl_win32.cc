@@ -14,22 +14,39 @@
 static connx::internal::LibraryInitializer g_lib_initializer;
 static connx::ConnectTimeoutList g_connect_timeouts;
 static LPFN_CONNECTEX g_connectex = nullptr;
+static connx::AtomicBool g_connectex_lock{false};
+
 static connx_error connx_get_connectex(SOCKET s) {
-    DWORD NumberofBytes;
-    int status = 0;
+    // Fast path: already cached
+    if (g_connectex) {
+        return CONNX_ERROR_NONE;
+    }
 
-    if (!g_connectex) {
-        GUID guid = WSAID_CONNECTEX;
-        status = WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER, &guid, sizeof(guid), &g_connectex,
-                          sizeof(g_connectex), &NumberofBytes, NULL, NULL);
-
-        if (status != 0) {
-            return CONNX_SYSTEM_ERROR(WSAGetLastError(),
-                                      "WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER)");
+    // Spin acquire. While waiting, re-check g_connectex in case the
+    // lock holder has already finished initializing.
+    while (g_connectex_lock.Exchange(true, connx::MemoryOrder::ACQUIRE)) {
+        if (g_connectex) {
+            return CONNX_ERROR_NONE;
         }
     }
 
-    return CONNX_ERROR_NONE;
+    connx_error err = CONNX_ERROR_NONE;
+    if (!g_connectex) {
+        GUID guid = WSAID_CONNECTEX;
+        DWORD bytes;
+        LPFN_CONNECTEX fn = nullptr;
+        int status = WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER, &guid, sizeof(guid), &fn,
+                              sizeof(fn), &bytes, NULL, NULL);
+        if (status != 0) {
+            err = CONNX_SYSTEM_ERROR(WSAGetLastError(),
+                                     "WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER)");
+        } else {
+            g_connectex = fn;
+        }
+    }
+
+    g_connectex_lock.Store(false, connx::MemoryOrder::RELEASE);
+    return err;
 }
 
 /* set a socket to non blocking mode */
@@ -39,15 +56,6 @@ connx_error connx_set_socket_nonblocking(SOCKET fd, int non_blocking) {
     int status = WSAIoctl(fd, FIONBIO, &param, sizeof(param), NULL, 0, &BytesReturned, NULL, NULL);
     return status == 0 ? CONNX_ERROR_NONE
                        : CONNX_SYSTEM_ERROR(WSAGetLastError(), "WSAIoctl(FIONBIO)");
-}
-
-/* set a socket to reuse old addresses */
-connx_error connx_set_socket_reuse_addr(SOCKET fd, int reuse) {
-    int val = (reuse) ? 1 : 0;
-    int status = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&val, sizeof(val));
-
-    return status == 0 ? CONNX_ERROR_NONE
-                       : CONNX_SYSTEM_ERROR(WSAGetLastError(), "setsockopt(SO_REUSEADDR)");
 }
 
 /* disable nagle */
@@ -258,6 +266,7 @@ ClientImpl::ClientImpl()
     , next_package_size_(0)
     , last_send_time_(0)
     , last_recv_time_(0)
+    , connect_deadline_(0)
     , number_of_bytes_sent_(0)
     , number_of_bytes_received_(0)
     , pending_io_(0)

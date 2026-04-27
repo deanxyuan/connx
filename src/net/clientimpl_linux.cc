@@ -91,8 +91,6 @@ connx_error connx_prepare_client_socket(int fd, const connx::TcpOptions& tcp) {
         if (ret != CONNX_ERROR_NONE) goto failure;
     }
 
-    goto done;
-
 #ifdef TCP_QUICKACK
     if (tcp.tcp_quickack) {
         int val = 1;
@@ -112,13 +110,12 @@ connx_error connx_prepare_client_socket(int fd, const connx::TcpOptions& tcp) {
         setsockopt(fd, SOL_SOCKET, SO_LINGER, &ling, sizeof(ling));
     }
 
-    goto done;
+    return ret;
 
 failure:
     if (fd >= 0) {
         close(fd);
     }
-done:
     return ret;
 }
 
@@ -278,6 +275,7 @@ ClientImpl::ClientImpl()
     , next_package_size_(0)
     , last_send_time_(0)
     , last_recv_time_(0)
+    , connect_deadline_(0)
     , number_of_bytes_sent_(0)
     , number_of_bytes_received_(0)
     , buffer_(nullptr)

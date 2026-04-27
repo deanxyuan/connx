@@ -52,7 +52,7 @@ public:
     virtual bool IsConnected() const = 0;
 
     // --- Data Interaction ---
-    virtual int64_t SendBuffer(const void* data, size_t len) = 0;
+    virtual bool SendBuffer(const void* data, size_t len) = 0;
 
     // --- Observability ---
     virtual void GetMetrics(Metrics* out_metrics) const = 0;

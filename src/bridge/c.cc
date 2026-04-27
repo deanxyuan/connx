@@ -240,7 +240,7 @@ int connx_client_is_connected(const connx_client_t* client) {
 // Data Transmission
 // ============================================================================
 
-int64_t connx_client_send_buffer(connx_client_t* client, const void* data, size_t len) {
+int connx_client_send_buffer(connx_client_t* client, const void* data, size_t len) {
     if (!client || !client->client || !data || len == 0) return -1;
     return client->client->SendBuffer(data, len) ? 0 : -1;
 }

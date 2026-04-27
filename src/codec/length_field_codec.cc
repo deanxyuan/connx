@@ -33,7 +33,7 @@ DecodeResult LengthFieldCodec::Decode(const char* data, size_t len, size_t* cons
 
     // Step 3: Validate the body length for sanity and potential overflow.
     // The maximum allowed body size is limited by what can fit in a size_t.
-    if (body_length >= INT64_MAX) {
+    if (body_length >= INT64_MAX || body_length + header_len_ >= INT64_MAX) {
         return DecodeResult::kError;
     }
 
