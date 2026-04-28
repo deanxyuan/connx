@@ -144,8 +144,14 @@ if(BUILD_TESTS)
         get_filename_component(target_name "${test_file}" NAME_WE)
         add_executable("${target_name}"
             "${test_file}"
-            "${PROJECT_SOURCE_DIR}/test/testutil.cc"
+            "${PROJECT_SOURCE_DIR}/test/util/testutil.cc"
         )
+        # Only the integration test needs the echo server.
+        if(target_name STREQUAL "test_integration")
+            target_sources("${target_name}" PRIVATE
+                "${PROJECT_SOURCE_DIR}/test/support/echoserver.cc"
+            )
+        endif()
         target_include_directories("${target_name}" PRIVATE "${PROJECT_SOURCE_DIR}")
         target_link_libraries("${target_name}" PRIVATE connx_objects ${BASE_LIBRARIES})
         add_test(NAME "${target_name}" COMMAND "${target_name}")

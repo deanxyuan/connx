@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "test/testutil.h"
+#include "test/util/testutil.h"
 #include "connx/codec/delimiter_codec.h"
 #include "connx/codec/fixed_length_codec.h"
 #include "connx/codec/length_field_codec.h"

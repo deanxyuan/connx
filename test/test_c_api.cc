@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "test/testutil.h"
+#include "test/util/testutil.h"
 #include "connx/c.h"
 
 #include <string.h>
