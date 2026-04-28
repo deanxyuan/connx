@@ -155,7 +155,11 @@ CONNX_API connx_codec_t* connx_codec_new_length_field(uint32_t length_field_offs
 CONNX_API connx_codec_t* connx_codec_new_callback(connx_decode_callback_t callback, void* userdata);
 
 /**
- * @brief Destroys a codec instance and releases its resources.
+ * @brief Destroys a codec instance if ownership has not been transferred.
+ *
+ * If the codec was passed to `connx_client_options_set_codec`, ownership was
+ * transferred and this call is a no-op for the underlying codec. Only the
+ * wrapper is freed.
  *
  * @param codec The codec to destroy. NULL is safe (no-op).
  */
@@ -173,19 +177,26 @@ CONNX_API void connx_codec_destroy(connx_codec_t* codec);
 CONNX_API connx_client_options_t* connx_client_options_new();
 
 /**
- * @brief Destroys a options instance
+ * @brief Destroys an options instance.
  *
- * @param options The options to destroy.
+ * If a codec was set via `connx_client_options_set_codec` and not transferred
+ * to a client via `connx_client_new`, that codec is destroyed as well.
+ *
+ * @param options The options to destroy. NULL is safe (no-op).
  */
 CONNX_API void connx_client_options_destroy(connx_client_options_t* options);
 
 /**
  * @brief Configures the protocol codec for the client.
  *
- * This must be called before `connx_client_connect`.
+ * Takes ownership of @p codec. After this call, @p codec must not be used or
+ * destroyed directly — its lifetime is now managed by @p options.
+ *
+ * If @p options already holds a codec, the old one is destroyed before the new
+ * one is stored.
  *
  * @param options The options instance.
- * @param codec The codec instace.
+ * @param codec The codec instance. Ownership is transferred to options.
  */
 CONNX_API void connx_client_options_set_codec(connx_client_options_t* options,
                                               connx_codec_t* codec);
@@ -227,6 +238,13 @@ CONNX_API void connx_client_options_set_connect_timeout(connx_client_options_t* 
 // ============================================================================
 /**
  * @brief Creates a new connx client instance.
+ *
+ * On success, takes ownership of the codec from @p opts and the client will
+ * delete it in `connx_client_destroy`. @p opts may be destroyed independently
+ * afterwards — it no longer owns the codec.
+ *
+ * On failure (returns NULL), ownership remains with @p opts; the caller must
+ * still call `connx_client_options_destroy` to release it.
  *
  * @param handler Callback for connection state changes. Can't be NULL.
  * @param opts client options. Can't be NULL.

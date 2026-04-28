@@ -118,8 +118,9 @@ connx_codec_t* connx_codec_new_fixed_length(size_t frame_length) {
     wrapper->codec_ = new FixedLengthCodec(frame_length);
     return wrapper;
 }
-connx_codec_t* connx_codec_new_length_field(uint32_t length_field_offset, uint32_t length_field_length,
-                                            uint32_t header_len, uint32_t network_to_host) {
+connx_codec_t* connx_codec_new_length_field(uint32_t length_field_offset,
+                                            uint32_t length_field_length, uint32_t header_len,
+                                            uint32_t network_to_host) {
     auto wrapper = new connx_codec_s;
     wrapper->codec_ = new LengthFieldCodec(length_field_offset, length_field_length, header_len,
                                            network_to_host != 0);
@@ -134,7 +135,9 @@ connx_codec_t* connx_codec_new_callback(connx_decode_callback_t callback, void* 
 
 void connx_codec_destroy(connx_codec_t* codec) {
     if (codec) {
-        delete codec->codec_;
+        if (codec->codec_) {
+            delete codec->codec_;
+        }
         delete codec;
     }
 }
@@ -154,12 +157,19 @@ void connx_client_options_destroy(connx_client_options_t* options) {
         if (options->local_address_copy) {
             free(options->local_address_copy);
         }
+        if (options->opts.codec) {
+            delete options->opts.codec;
+        }
         delete options;
     }
 }
 void connx_client_options_set_codec(connx_client_options_t* options, connx_codec_t* codec) {
     if (!options || !codec) return;
+    if (options->opts.codec) {
+        delete options->opts.codec; // release previous codec if set
+    }
     options->opts.codec = codec->codec_;
+    codec->codec_ = nullptr; // ownership transferred to options
 }
 void connx_client_options_set_local_address(connx_client_options_t* options,
                                             const char* local_address) {
@@ -200,7 +210,7 @@ void connx_client_options_set_connect_timeout(connx_client_options_t* options, i
 // Client Lifecycle
 // ============================================================================
 connx_client_t* connx_client_new(connx_client_handler_t* handler, connx_client_options_t* opts) {
-    if (!handler || !opts) return nullptr;
+    if (!handler || !opts || opts->opts.codec == nullptr) return nullptr;
 
     auto c = new connx_client_s;
     c->handler = handler;
@@ -209,6 +219,9 @@ connx_client_t* connx_client_new(connx_client_handler_t* handler, connx_client_o
         delete c;
         return nullptr;
     }
+    // Codec pointer already stored in ClientImpl::opt_.codec via SetOptions.
+    // Null opts to signal ownership has been transferred.
+    opts->opts.codec = nullptr;
     return c;
 }
 void connx_client_destroy(connx_client_t* client) {

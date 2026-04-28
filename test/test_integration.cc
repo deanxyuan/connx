@@ -81,8 +81,7 @@ TEST(IntegrationTest, echo_send_and_receive) {
 
     SyncHandler handler;
     connx::ClientOptions opts;
-    connx::DelimiterCodec codec('\n');
-    opts.codec = &codec;
+    opts.codec = new connx::DelimiterCodec('\n');
 
     connx::Client* cli = connx::CreateClient(&handler, opts);
     ASSERT_TRUE(cli != nullptr);
@@ -102,7 +101,7 @@ TEST(IntegrationTest, echo_send_and_receive) {
     ASSERT_EQ(handler.received_, "hello from integration test\n");
 
     cli->Disconnect();
-    connx::ReleaseClient(cli);
+    connx::ReleaseClient(cli); // deletes codec via ~ClientImpl
     test::StopEchoServer();
 }
 
@@ -112,8 +111,7 @@ TEST(IntegrationTest, echo_send_and_receive) {
 TEST(IntegrationTest, connect_timeout) {
     SyncHandler handler;
     connx::ClientOptions opts;
-    connx::DelimiterCodec codec('\n');
-    opts.codec = &codec;
+    opts.codec = new connx::DelimiterCodec('\n');
     opts.tcp.connect_timeout_ms = 200;
 
     connx::Client* cli = connx::CreateClient(&handler, opts);
@@ -138,14 +136,13 @@ TEST(IntegrationTest, multiple_clients) {
     const int kNumClients = 3;
     SyncHandler handlers[kNumClients];
     connx::Client* clients[kNumClients];
-    connx::DelimiterCodec codec('\n');
 
     std::string addr = "127.0.0.1:" + std::to_string(port);
 
-    // Connect all.
+    // Connect all — each client owns its own codec.
     for (int i = 0; i < kNumClients; i++) {
         connx::ClientOptions opts;
-        opts.codec = &codec;
+        opts.codec = new connx::DelimiterCodec('\n');
 
         clients[i] = connx::CreateClient(&handlers[i], opts);
         ASSERT_TRUE(clients[i] != nullptr);

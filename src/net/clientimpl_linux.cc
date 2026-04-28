@@ -4,6 +4,7 @@
  */
 
 #include "src/net/clientimpl.h"
+#include "connx/codec.h"
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -64,8 +65,7 @@ connx_error connx_set_socket_cloexec(int fd, int close_on_exec) {
 connx_error connx_set_socket_low_latency(int fd, int low_latency) {
     int val = (low_latency != 0);
     int status = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val));
-    return status == 0 ? CONNX_ERROR_NONE
-                       : CONNX_POSIX_ERROR(errno, "setsockopt(TCP_NODELAY)");
+    return status == 0 ? CONNX_ERROR_NONE : CONNX_POSIX_ERROR(errno, "setsockopt(TCP_NODELAY)");
 }
 
 connx_error connx_prepare_client_socket(int fd, const connx::TcpOptions& tcp) {
@@ -275,6 +275,7 @@ ClientImpl::ClientImpl()
 }
 
 ClientImpl::~ClientImpl() {
+    if (opt_.codec) delete opt_.codec;
     if (buffer_) delete[] buffer_;
 }
 

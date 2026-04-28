@@ -58,7 +58,13 @@ public:
     virtual void GetMetrics(Metrics* out_metrics) const = 0;
 };
 
-// Factory function to create a Client instance
+/**
+ * @brief Create a client with the given handler and options.
+ *
+ * On success, the client takes ownership of opts.codec and deletes it when the
+ * client is released via ReleaseClient(). On failure (returns nullptr), the
+ * caller retains ownership of opts.codec and must delete it manually.
+ */
 CONNX_API Client* CreateClient(ClientHandler* handler, const ClientOptions& opts);
 CONNX_API void ReleaseClient(Client* cli);
 

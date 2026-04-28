@@ -50,14 +50,14 @@ public:
         client_ = connx::CreateClient(this, opts);
         if (!client_) {
             fprintf(stderr, "failed to create client\n");
-            delete opts.codec;
+            delete opts.codec; // CreateClient failed, caller still owns codec
             return;
         }
+        // CreateClient succeeded — codec ownership transferred to client.
         printf("[info] connecting to %s ...\n", host);
         if (!client_->Connect(host)) {
             fprintf(stderr, "connect failed immediately\n");
-            connx::ReleaseClient(client_);
-            delete opts.codec;
+            connx::ReleaseClient(client_); // deletes codec via ~ClientImpl
             return;
         }
         while (!done_) {
@@ -68,8 +68,7 @@ public:
         client_->GetMetrics(&m);
         printf("[metrics] sent=%llu recv=%llu\n", (unsigned long long)m.bytes_sent,
                (unsigned long long)m.bytes_received);
-        connx::ReleaseClient(client_);
-        delete opts.codec;
+        connx::ReleaseClient(client_); // deletes codec via ~ClientImpl
     }
 
 private:

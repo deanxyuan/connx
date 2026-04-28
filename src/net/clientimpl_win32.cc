@@ -4,6 +4,7 @@
  */
 
 #include "src/net/clientimpl.h"
+#include "connx/codec.h"
 #include "src/utils/status.h"
 #include "src/utils/useful.h"
 #include "src/utils/time.h"
@@ -281,6 +282,7 @@ ClientImpl::ClientImpl()
 }
 
 ClientImpl::~ClientImpl() {
+    if (opt_.codec) delete opt_.codec;
     if (buffer_) delete[] buffer_;
     if (conn_ole_) delete conn_ole_;
     if (send_ole_) delete send_ole_;
