@@ -226,8 +226,9 @@ DWORD ClientImpl::PollingThread(void*) {
                 }
                 connector->Unref();
             } else {
-                // IOCP TIMEOUT
+                // IOCP TIMEOUT - still need to check connect deadlines.
             }
+            g_connect_timeouts.CheckTimeouts();
             continue;
         }
         OverlappedEx* olex = (OverlappedEx*)lpOverlapped;

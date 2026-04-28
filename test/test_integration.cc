@@ -73,11 +73,10 @@ public:
 } // namespace
 
 // ============================================================================
-// 1. Basic echo — connect, send, receive, disconnect
+// 1. Basic echo - connect, send, receive, disconnect
 // ============================================================================
 TEST(IntegrationTest, echo_send_and_receive) {
-    test::EchoServer server;
-    int port = server.Start(0);
+    int port = test::StartEchoServer(0);
     ASSERT_TRUE(port > 0);
 
     SyncHandler handler;
@@ -104,7 +103,7 @@ TEST(IntegrationTest, echo_send_and_receive) {
 
     cli->Disconnect();
     connx::ReleaseClient(cli);
-    server.Stop();
+    test::StopEchoServer();
 }
 
 // ============================================================================
@@ -120,7 +119,7 @@ TEST(IntegrationTest, connect_timeout) {
     connx::Client* cli = connx::CreateClient(&handler, opts);
     ASSERT_TRUE(cli != nullptr);
 
-    // TEST-NET-1 (RFC 5737) — non-routable, will time out.
+    // TEST-NET-1 (RFC 5737) - non-routable, will time out.
     ASSERT_TRUE(cli->Connect("192.0.2.1:80"));
 
     ASSERT_TRUE(handler.WaitForConnect(3000));
@@ -133,8 +132,7 @@ TEST(IntegrationTest, connect_timeout) {
 // 3. Multiple concurrent clients
 // ============================================================================
 TEST(IntegrationTest, multiple_clients) {
-    test::EchoServer server;
-    int port = server.Start(0);
+    int port = test::StartEchoServer(0);
     ASSERT_TRUE(port > 0);
 
     const int kNumClients = 3;
@@ -178,7 +176,7 @@ TEST(IntegrationTest, multiple_clients) {
         connx::ReleaseClient(clients[i]);
     }
 
-    server.Stop();
+    test::StopEchoServer();
 }
 
 RUN_ALL_TESTS()
