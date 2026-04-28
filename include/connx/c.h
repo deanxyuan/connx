@@ -278,6 +278,19 @@ CONNX_API void connx_client_destroy(connx_client_t* client);
 CONNX_API int connx_client_connect(connx_client_t* client, const char* host);
 
 /**
+ * @brief Initiates a connection with separate host and port parameters.
+ *
+ * IPv6 addresses (e.g. "::1") are automatically wrapped in brackets by the
+ * library — the caller does not need to add them.
+ *
+ * @param client The client instance.
+ * @param ip The hostname or IP address as a null-terminated string.
+ * @param port The port number (1–65535).
+ * @return 0 on success (operation started), non-zero on immediate error.
+ */
+CONNX_API int connx_client_connect_ip_port(connx_client_t* client, const char* ip, int port);
+
+/**
  * @brief Disconnects from the current remote host.
  *
  * This is an asynchronous operation.

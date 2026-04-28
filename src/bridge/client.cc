@@ -6,6 +6,8 @@
 #include "connx/client.h"
 #include "connx/codec.h"
 #include "src/net/clientimpl.h"
+#include "src/net/resolve_address.h"
+#include <stdlib.h>
 
 namespace connx {
 ClientHandler::~ClientHandler() {}
@@ -31,6 +33,15 @@ public:
     bool Connect(const char* hosts) override {
         if (hosts == nullptr) return false;
         return impl_->Connect(hosts);
+    }
+    bool Connect(const char* ip, int port) override {
+        if (ip == nullptr || port <= 0 || port > 65535) return false;
+        char* addr = nullptr;
+        connx_join_host_port(&addr, ip, port);
+        if (addr == nullptr) return false;
+        bool ok = impl_->Connect(addr);
+        free(addr);
+        return ok;
     }
 
     void Disconnect() override { impl_->Disconnect(); }

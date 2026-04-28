@@ -47,6 +47,7 @@ public:
 
     // --- Lifecycle ---
     virtual bool Connect(const char* hosts) = 0;
+    virtual bool Connect(const char* ip, int port) = 0;
     virtual void Disconnect() = 0;
 
     virtual bool IsConnected() const = 0;

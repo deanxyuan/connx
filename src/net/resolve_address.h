@@ -27,7 +27,7 @@ bool connx_split_host_port(const std::string& name, std::string* host, std::stri
 
 /* Resolve addr in a blocking fashion. On success,
    default_port can be nullptr, or "https" or "http"
-   result must be freed with grpc_resolved_addresses_destroy. */
+   result must be freed with connx_resolved_addresses_destroy. */
 connx_error connx_blocking_resolve_address(const char* name, const char* default_port,
                                            connx_resolved_addresses** addresses);
 

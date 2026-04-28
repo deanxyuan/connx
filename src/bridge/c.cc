@@ -79,7 +79,7 @@ struct connx_client_options_s {
 // ============================================================================
 
 struct connx_client_s {
-    Client* client;
+    Client* impl;
     ClientHandler* handler;
 };
 
@@ -214,8 +214,8 @@ connx_client_t* connx_client_new(connx_client_handler_t* handler, connx_client_o
 
     auto c = new connx_client_s;
     c->handler = handler;
-    c->client = CreateClient(handler, opts->opts);
-    if (!c->client) {
+    c->impl = CreateClient(handler, opts->opts);
+    if (!c->impl) {
         delete c;
         return nullptr;
     }
@@ -226,8 +226,8 @@ connx_client_t* connx_client_new(connx_client_handler_t* handler, connx_client_o
 }
 void connx_client_destroy(connx_client_t* client) {
     if (client) {
-        if (client->client) {
-            ReleaseClient(client->client);
+        if (client->impl) {
+            ReleaseClient(client->impl);
         }
         delete client;
     }
@@ -237,16 +237,20 @@ void connx_client_destroy(connx_client_t* client) {
 // Connection Management
 // ============================================================================
 int connx_client_connect(connx_client_t* client, const char* host) {
-    if (!client || !client->client || !host) return -1;
-    return client->client->Connect(host) ? 0 : -1;
+    if (!client || !client->impl || !host) return -1;
+    return client->impl->Connect(host) ? 0 : -1;
+}
+int connx_client_connect_ip_port(connx_client_t* client, const char* ip, int port) {
+    if (!client || !client->impl || !ip) return -1;
+    return client->impl->Connect(ip, port) ? 0 : -1;
 }
 void connx_client_disconnect(connx_client_t* client) {
-    if (!client || !client->client) return;
-    client->client->Disconnect();
+    if (!client || !client->impl) return;
+    client->impl->Disconnect();
 }
 int connx_client_is_connected(const connx_client_t* client) {
-    if (!client || !client->client) return 0;
-    return client->client->IsConnected() ? 1 : 0;
+    if (!client || !client->impl) return 0;
+    return client->impl->IsConnected() ? 1 : 0;
 }
 
 // ============================================================================
@@ -254,18 +258,18 @@ int connx_client_is_connected(const connx_client_t* client) {
 // ============================================================================
 
 int connx_client_send_buffer(connx_client_t* client, const void* data, size_t len) {
-    if (!client || !client->client || !data || len == 0) return -1;
-    return client->client->SendBuffer(data, len) ? 0 : -1;
+    if (!client || !client->impl || !data || len == 0) return -1;
+    return client->impl->SendBuffer(data, len) ? 0 : -1;
 }
 
 // ============================================================================
 // Observability
 // ============================================================================
 void connx_client_get_metrics(const connx_client_t* client, connx_metrics_t* metrics) {
-    if (!client || !client->client || !metrics) return;
+    if (!client || !client->impl || !metrics) return;
 
     Metrics m;
-    client->client->GetMetrics(&m);
+    client->impl->GetMetrics(&m);
     metrics->state = static_cast<int>(m.state);
     metrics->bytes_sent = m.bytes_sent;
     metrics->bytes_received = m.bytes_received;
