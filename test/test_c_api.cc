@@ -206,7 +206,7 @@ TEST(CApiTest, ownership_codec_destroy_after_set_codec) {
     connx_codec_t* codec = connx_codec_new_delimiter('\n');
     connx_client_options_t* opts = connx_client_options_new();
 
-    connx_client_options_set_codec(opts, codec); // codec ownership → opts
+    connx_client_options_set_codec(opts, codec); // codec ownership -> opts
     connx_codec_destroy(codec);                   // wrapper destroyed, codec NOT deleted
     connx_client_options_destroy(opts);           // deletes codec
 }
@@ -228,7 +228,7 @@ TEST(CApiTest, ownership_options_destroy_after_client_new) {
     connx_client_handler_destroy(h);
 }
 
-// Full ownership chain: wrapper → opts → client → ~ClientImpl.
+// Full ownership chain: wrapper -> opts -> client -> ~ClientImpl.
 TEST(CApiTest, ownership_full_chain) {
     connx_client_handler_t* h =
         connx_client_handler_new(nullptr, nullptr, nullptr, nullptr, nullptr);
@@ -252,7 +252,7 @@ TEST(CApiTest, ownership_client_new_failure_codec_stays_with_opts) {
     connx_client_options_t* opts = connx_client_options_new();
     connx_client_options_set_codec(opts, codec);
 
-    // handler is NULL → client_new must return NULL.
+    // handler is NULL -> client_new must return NULL.
     connx_client_t* cli = connx_client_new(nullptr, opts);
     ASSERT_TRUE(cli == nullptr);
 
@@ -287,7 +287,7 @@ TEST(CApiTest, ownership_codec_destroy_without_set_codec) {
     connx_codec_destroy(codec); // wrapper owns codec, deleted here
 }
 
-// Repeat set_codec → client_new → all destroy. No crash on second iteration.
+// Repeat set_codec -> client_new -> all destroy. No crash on second iteration.
 TEST(CApiTest, ownership_repeated_cycle) {
     for (int i = 0; i < 3; i++) {
         connx_client_handler_t* h =

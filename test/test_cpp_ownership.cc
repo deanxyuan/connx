@@ -42,7 +42,7 @@ RUN_ALL_TESTS();
 
 // ============================================================================
 // C++ API ownership: CreateClient takes ownership of codec on success.
-// ReleaseClient → ~ClientImpl must delete codec exactly once.
+// ReleaseClient -> ~ClientImpl must delete codec exactly once.
 // ============================================================================
 TEST(CppOwnership, create_client_success_takes_ownership) {
     std::atomic<int> alive{0};
@@ -66,7 +66,7 @@ TEST(CppOwnership, create_client_failure_caller_deletes_codec) {
     opts.codec = new TrackedCodec(&alive);
     ASSERT_EQ(alive.load(), 1);
 
-    // Null handler → CreateClient must fail.
+    // Null handler -> CreateClient must fail.
     connx::Client* cli = connx::CreateClient(nullptr, opts);
     ASSERT_TRUE(cli == nullptr);
 

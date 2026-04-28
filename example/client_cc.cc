@@ -53,7 +53,7 @@ public:
             delete opts.codec; // CreateClient failed, caller still owns codec
             return;
         }
-        // CreateClient succeeded — codec ownership transferred to client.
+        // CreateClient succeeded -- codec ownership transferred to client.
         printf("[info] connecting to %s ...\n", host);
         if (!client_->Connect(host)) {
             fprintf(stderr, "connect failed immediately\n");

@@ -139,7 +139,7 @@ TEST(IntegrationTest, multiple_clients) {
 
     std::string addr = "127.0.0.1:" + std::to_string(port);
 
-    // Connect all — each client owns its own codec.
+    // Connect all -- each client owns its own codec.
     for (int i = 0; i < kNumClients; i++) {
         connx::ClientOptions opts;
         opts.codec = new connx::DelimiterCodec('\n');

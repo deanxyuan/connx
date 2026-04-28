@@ -137,12 +137,14 @@ CONNX_API connx_codec_t* connx_codec_new_fixed_length(size_t frame_length);
  *
  * @param length_field_offset Byte offset of the length field within the header.
  * @param length_field_length Size of the length field in bytes (1, 2, 4, or 8).
- * @param header_len Total header length in bytes (must be >= length_field_offset + length_field_length).
+ * @param header_len Total header length in bytes (must be >= length_field_offset +
+ * length_field_length).
  * @param network_to_host Non-zero for big-endian (network byte order), 0 for little-endian.
  * @return New codec instance, or NULL on failure.
  */
 CONNX_API connx_codec_t* connx_codec_new_length_field(uint32_t length_field_offset,
-                                                      uint32_t length_field_length, uint32_t header_len,
+                                                      uint32_t length_field_length,
+                                                      uint32_t header_len,
                                                       uint32_t network_to_host);
 
 /**
@@ -190,7 +192,7 @@ CONNX_API void connx_client_options_destroy(connx_client_options_t* options);
  * @brief Configures the protocol codec for the client.
  *
  * Takes ownership of @p codec. After this call, @p codec must not be used or
- * destroyed directly — its lifetime is now managed by @p options.
+ * destroyed directly -- its lifetime is now managed by @p options.
  *
  * If @p options already holds a codec, the old one is destroyed before the new
  * one is stored.
@@ -241,7 +243,7 @@ CONNX_API void connx_client_options_set_connect_timeout(connx_client_options_t* 
  *
  * On success, takes ownership of the codec from @p opts and the client will
  * delete it in `connx_client_destroy`. @p opts may be destroyed independently
- * afterwards — it no longer owns the codec.
+ * afterwards -- it no longer owns the codec.
  *
  * On failure (returns NULL), ownership remains with @p opts; the caller must
  * still call `connx_client_options_destroy` to release it.
@@ -281,11 +283,11 @@ CONNX_API int connx_client_connect(connx_client_t* client, const char* host);
  * @brief Initiates a connection with separate host and port parameters.
  *
  * IPv6 addresses (e.g. "::1") are automatically wrapped in brackets by the
- * library — the caller does not need to add them.
+ * library -- the caller does not need to add them.
  *
  * @param client The client instance.
  * @param ip The hostname or IP address as a null-terminated string.
- * @param port The port number (1–65535).
+ * @param port The port number (1-65535).
  * @return 0 on success (operation started), non-zero on immediate error.
  */
 CONNX_API int connx_client_connect_ip_port(connx_client_t* client, const char* ip, int port);
