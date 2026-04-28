@@ -106,13 +106,27 @@ void connx_log(int level, int line, const char* format, ...) {
 
     size_t buff_len = (size_t)ret + 1;
     message = (char*)malloc(buff_len);
+    if (message == NULL) return;
     va_start(args, format);
     ret = vsnprintf_s(message, buff_len, _TRUNCATE, format, args);
     va_end(args);
 #else
-    if (vasprintf(&message, format, args) == -1) { // stdio.h
-        va_end(args);
+    char buf[128];
+    int ret = vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    if (ret < 0) {
         return;
+    }
+
+    size_t buff_len = (size_t)ret + 1;
+    message = (char*)malloc(buff_len);
+    if (message == NULL) return;
+    if (buff_len <= sizeof(buf)) {
+        memcpy(message, buf, buff_len);
+    } else {
+        va_start(args, format);
+        vsnprintf(message, buff_len, format, args);
+        va_end(args);
     }
 #endif
 

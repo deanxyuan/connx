@@ -63,18 +63,9 @@ connx_error connx_set_socket_cloexec(int fd, int close_on_exec) {
 /* disable nagle */
 connx_error connx_set_socket_low_latency(int fd, int low_latency) {
     int val = (low_latency != 0);
-    int newval;
-    socklen_t intlen = sizeof(newval);
-    if (0 != setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val))) {
-        return CONNX_POSIX_ERROR(errno, "setsockopt(TCP_NODELAY)");
-    }
-    if (0 != getsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &newval, &intlen)) {
-        return CONNX_POSIX_ERROR(errno, "getsockopt(TCP_NODELAY)");
-    }
-    if ((newval != 0) != val) {
-        return CONNX_ERROR_FROM_STATIC_STRING("Failed to set TCP_NODELAY");
-    }
-    return CONNX_ERROR_NONE;
+    int status = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val));
+    return status == 0 ? CONNX_ERROR_NONE
+                       : CONNX_POSIX_ERROR(errno, "setsockopt(TCP_NODELAY)");
 }
 
 connx_error connx_prepare_client_socket(int fd, const connx::TcpOptions& tcp) {

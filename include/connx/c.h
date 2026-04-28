@@ -98,12 +98,67 @@ CONNX_API void connx_client_handler_destroy(connx_client_handler_t* handler);
 // ============================================================================
 // Codec
 // ============================================================================
+
+/**
+ * @brief Creates a delimiter-based codec.
+ *
+ * Frames are split by the given delimiter character (e.g. '\n' for line-based protocols).
+ * The delimiter itself is not included in the decoded frame data.
+ *
+ * @param delimiter The byte value used to split frames.
+ * @return New codec instance, or NULL on failure.
+ */
 CONNX_API connx_codec_t* connx_codec_new_delimiter(char delimiter);
+
+/**
+ * @brief Creates a fixed-length codec.
+ *
+ * Each frame is exactly @p frame_length bytes. Suitable for protocols with
+ * constant-size messages.
+ *
+ * @param frame_length Exact number of bytes per frame (must be > 0).
+ * @return New codec instance, or NULL on failure.
+ */
 CONNX_API connx_codec_t* connx_codec_new_fixed_length(size_t frame_length);
-CONNX_API connx_codec_t* connx_codec_new_length_field(size_t length_field_offset,
-                                                      size_t length_field_length, size_t header_len,
-                                                      size_t network_to_host);
+
+/**
+ * @brief Creates a length-field-based codec.
+ *
+ * Decodes frames where a header contains a length field specifying the body size.
+ * The frame structure is:
+ * @code
+ * +------------------+----------------------+------------------+
+ * | Length Field (N) | Optional Header (H)  | Body (L bytes)   |
+ * +------------------+----------------------+------------------+
+ * @endcode
+ *
+ * All size parameters use uint32_t to provide a consistent ABI across platforms
+ * and implicitly bound the maximum frame size (~4 GB).
+ *
+ * @param length_field_offset Byte offset of the length field within the header.
+ * @param length_field_length Size of the length field in bytes (1, 2, 4, or 8).
+ * @param header_len Total header length in bytes (must be >= length_field_offset + length_field_length).
+ * @param network_to_host Non-zero for big-endian (network byte order), 0 for little-endian.
+ * @return New codec instance, or NULL on failure.
+ */
+CONNX_API connx_codec_t* connx_codec_new_length_field(uint32_t length_field_offset,
+                                                      uint32_t length_field_length, uint32_t header_len,
+                                                      uint32_t network_to_host);
+
+/**
+ * @brief Creates a codec backed by a custom decode callback.
+ *
+ * @param callback User-provided decode function (see @ref connx_decode_callback_t).
+ * @param userdata Opaque pointer passed through to @p callback on each invocation.
+ * @return New codec instance, or NULL if @p callback is NULL.
+ */
 CONNX_API connx_codec_t* connx_codec_new_callback(connx_decode_callback_t callback, void* userdata);
+
+/**
+ * @brief Destroys a codec instance and releases its resources.
+ *
+ * @param codec The codec to destroy. NULL is safe (no-op).
+ */
 CONNX_API void connx_codec_destroy(connx_codec_t* codec);
 
 // ============================================================================

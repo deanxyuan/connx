@@ -50,7 +50,7 @@ public:
 };
 
 Client* CreateClient(ClientHandler* handler, const ClientOptions& opts) {
-    if (handler == nullptr) return nullptr;
+    if (handler == nullptr || opts.codec == nullptr) return nullptr;
     auto p = new ClientAdaptor();
     p->Init(handler, opts);
     return p;

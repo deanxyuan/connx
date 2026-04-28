@@ -118,8 +118,8 @@ connx_codec_t* connx_codec_new_fixed_length(size_t frame_length) {
     wrapper->codec_ = new FixedLengthCodec(frame_length);
     return wrapper;
 }
-connx_codec_t* connx_codec_new_length_field(size_t length_field_offset, size_t length_field_length,
-                                            size_t header_len, size_t network_to_host) {
+connx_codec_t* connx_codec_new_length_field(uint32_t length_field_offset, uint32_t length_field_length,
+                                            uint32_t header_len, uint32_t network_to_host) {
     auto wrapper = new connx_codec_s;
     wrapper->codec_ = new LengthFieldCodec(length_field_offset, length_field_length, header_len,
                                            network_to_host != 0);
