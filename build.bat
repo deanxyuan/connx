@@ -16,6 +16,7 @@ if "%~1"=="-c" (set cleanup=1 & shift & goto parse_args)
 if "%~1"=="-h" (call :show_help & exit /b 0)
 if "%~1"=="-d" (set dir_name=%~2 & shift & shift & goto parse_args)
 if "%~1"=="-j" (set num_of_jobs=%~2 & shift & shift & goto parse_args)
+if "%~1"=="-o" (set output_dir=%~2 & shift & shift & goto parse_args)
 if "%~1"=="-s" (set build_static=1 & shift & goto parse_args)
 if "%~1"=="-t" (set build_type=%~2 & shift & shift & goto parse_args)
 if "%~1"=="--tests" (set build_tests=1 & shift & goto parse_args)
@@ -86,13 +87,28 @@ if defined version (
     mkdir "%current_build_path%\lib" 2>nul
     mkdir "%current_build_path%\include" 2>nul
     xcopy /E /I /Y /Q "%project_source_dir%include\connx" "%current_build_path%\include\connx"
-    copy /Y "%current_build_path%\%build_type%\*" "%current_build_path%\lib\" >nul
+    copy /Y "%current_build_path%\%build_type%\connx.dll" "%current_build_path%\lib\" >nul 2>nul
+    copy /Y "%current_build_path%\%build_type%\connx.lib" "%current_build_path%\lib\" >nul 2>nul
 
     cd /d "%current_build_path%"
-    tar -zcf "connx_win_v%version%_%arch%.tar.gz" include lib
+    set "package_name=connx_win_v%version%_%arch%.tar.gz"
+    tar -zcf "!package_name!" include lib
+
+    :: Determine output directory
+    if not defined output_dir set "output_dir=output"
+    if not "!output_dir:~0,1!"==":" (
+        if not "!output_dir:~0,2!"=="\\" (
+            set "output_dir=%project_source_dir%!output_dir!"
+        )
+    )
+    if not exist "!output_dir!\" mkdir "!output_dir!\"
+    copy /Y "!package_name!" "!output_dir!\" >nul
+    echo packed: !output_dir!\!package_name!
+
+    :: Cleanup temporary files in build directory
+    del /q "!package_name!"
     rd /s /q "%current_build_path%\include"
     rd /s /q "%current_build_path%\lib"
-    echo packed: connx_win_v%version%_%arch%.tar.gz
     echo ----- finish ----
 )
 
@@ -108,6 +124,7 @@ echo options:
 echo -c             clean before building
 echo -d ^<dir^>     build directory (default: build)
 echo -j ^<n^>       parallel jobs (default: 2)
+echo -o ^<dir^>     output directory for tar.gz package (default: output)
 echo -s             build static library
 echo -t ^<type^>    build type: Debug / Release / RelWithDebInfo (default: RelWithDebInfo)
 echo -x             build for x86 (default:x64)

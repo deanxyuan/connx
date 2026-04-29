@@ -6,6 +6,7 @@ param(
     [switch]$s,         # build static library
     [string]$t,         # build type
     [switch]$x,         # x86 instead of x64
+    [string]$o,         # output directory
     [switch]$tests,     # build unit tests
     [switch]$examples   # build example programs
 )
@@ -22,6 +23,7 @@ function usage {
     Write-Host "  -s             build static library"
     Write-Host "  -t <type>      build type: Debug / Release / RelWithDebInfo"
     Write-Host "  -x             build for x86 (default: x64)"
+    Write-Host "  -o <dir>       output directory for tar.gz package (default: output)"
     Write-Host "  -tests         build unit tests"
     Write-Host "  -examples      build example programs"
     Write-Host "  -h             show this help"
@@ -116,18 +118,31 @@ try {
         New-Item -ItemType Directory -Path $include_path -Force | Out-Null
         
         Copy-Item -Path "$project_source_dir\include\connx" -Destination $include_path -Recurse -Force
-        Copy-Item -Path "$current_build_path\$build_type\*" -Destination $lib_path -Force
+        Copy-Item -Path "$current_build_path\$build_type\connx.dll" -Destination $lib_path -Force -ErrorAction SilentlyContinue
+        Copy-Item -Path "$current_build_path\$build_type\connx.lib" -Destination $lib_path -Force -ErrorAction SilentlyContinue
         
         Push-Location $current_build_path
         try {
             $package_name = "connx_win_v${version}_${arch}.tar.gz"
             tar -zcf $package_name include lib
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "packed: $package_name"
+                # Determine output directory
+                if (-not $o) { $o = "output" }
+                $output_dir = if ([System.IO.Path]::IsPathRooted($o)) {
+                    $o
+                } else {
+                    Join-Path $project_source_dir $o
+                }
+                if (-not (Test-Path $output_dir)) {
+                    New-Item -ItemType Directory -Path $output_dir -Force | Out-Null
+                }
+                Copy-Item $package_name $output_dir -Force
+                Write-Host "packed: $(Join-Path $output_dir $package_name)"
             } else {
                 Write-Warning "Failed to create package"
             }
         } finally {
+            Remove-Item $package_name -Force -ErrorAction SilentlyContinue
             Remove-Item $include_path -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item $lib_path -Recurse -Force -ErrorAction SilentlyContinue
             Pop-Location

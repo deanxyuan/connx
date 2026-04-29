@@ -18,6 +18,7 @@ usage() {
     echo "  -c              clean before building"
     echo "  -d <dir>        build directory (default: build)"
     echo "  -j <n>          number of parallel jobs (default: 2)"
+    echo "  -o <dir>        output directory for tar.gz package (default: output)"
     echo "  -s              build static library"
     echo "  -t <type>       build type: Debug / Release / RelWithDebInfo (default: RelWithDebInfo)"
     echo "  --tests         build unit tests"
@@ -38,6 +39,7 @@ while [ $# -gt 0 ]; do
         -c) cleanup=1 ;;
         -d) dir_name="$2"; shift ;;
         -j) num_of_jobs="$2"; shift ;;
+        -o) output_dir="$2"; shift ;;
         -s) build_static=1 ;;
         -t) build_type="$2"; shift ;;
         --tests) build_tests=1 ;;
@@ -130,9 +132,17 @@ if [ -n "$version" ]; then
     esac
 
     tar -zcf "$package_name" include lib
-    echo "packed: $package_name"
 
-    # Cleanup temporary package directories
+    # Determine output directory
+    output_dir="${output_dir:-$project_source_dir/output}"
+    [[ "$output_dir" != /* ]] && output_dir="$project_source_dir/$output_dir"
+    mkdir -p "$output_dir"
+
+    cp "$package_name" "$output_dir/"
+    echo "packed: $output_dir/$package_name"
+
+    # Cleanup temporary files in build directory
+    rm -f "$package_name"
     rm -rf "$current_build_path/include" "$current_build_path/lib"
     echo "---- finish ----"
 fi
