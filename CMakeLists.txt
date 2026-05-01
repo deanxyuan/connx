@@ -18,6 +18,10 @@ else()
     message(STATUS "Using default C++ Standard: ${CMAKE_CXX_STANDARD}")
 endif()
 
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.12" CACHE STRING "Minimum macOS deployment target")
+endif()
+
 option(BUILD_STATIC "build static library" OFF)
 option(BUILD_TESTS "build all unittests" OFF)
 option(BUILD_EXAMPLES "build example programs" OFF)
@@ -38,9 +42,14 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/net NET_SOURCE)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/utils UTILS_SOURCE)
 if(WIN32)
     list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_linux.cc)
+    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_macos.cc)
+elseif(APPLE)
+    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_linux.cc)
+    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_win32.cc)
 else()
     list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_win32.cc)
-endif()
+    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_macos.cc)
+    endif()
 
 # ============================================================================
 # Object Library
@@ -101,6 +110,11 @@ if (NOT BUILD_STATIC)
             VERSION ${CONNX_VERSION}
             SOVERSION ${CONNX_VERSION_MAJOR}
         )
+    endif()
+    if(APPLE)
+        set_target_properties(connx PROPERTIES
+            MACOSX_RPATH ON
+            INSTALL_NAME_DIR "@rpath")
     endif()
 endif()
 

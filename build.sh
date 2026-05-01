@@ -98,6 +98,14 @@ cmake --build . --config "$build_type" --parallel "$num_of_jobs" || {
 
 # Package
 if [ -n "$version" ]; then
+    # Detect platform
+    os_name=$(uname -s)
+    case "$os_name" in
+        Darwin)  platform="darwin" ;;
+        Linux)   platform="linux" ;;
+        *)       platform=$(echo "$os_name" | tr '[:upper:]' '[:lower:]') ;;
+    esac
+
     # Create package directories
     mkdir -p "$current_build_path/lib"
     mkdir -p "$current_build_path/include"
@@ -105,29 +113,44 @@ if [ -n "$version" ]; then
     # Copy headers
     cp -r "$project_source_dir/include/connx" "$current_build_path/include/"
 
-    # Copy libraries (adjust patterns as needed for your project)
-    real_so=$(find "$current_build_path" -maxdepth 1 -name 'libconnx.so.*.*' ! -type l -print -quit)
-    if [ -n "$real_so" ]; then
-        so_basename=$(basename "$real_so")
-        cp "$real_so" "$current_build_path/lib/"
-        major=$(echo "$version" | cut -d. -f1)
-        ln -sf "$so_basename" "$current_build_path/lib/libconnx.so.$major"
-        ln -sf "$so_basename" "$current_build_path/lib/libconnx.so"
+    # Copy libraries (handle both .so and .dylib)
+    if [ "$platform" = "darwin" ]; then
+        real_lib=$(find "$current_build_path" -maxdepth 1 -name 'libconnx.*.dylib' ! -type l -print -quit)
+        if [ -n "$real_lib" ]; then
+            lib_basename=$(basename "$real_lib")
+            cp "$real_lib" "$current_build_path/lib/"
+            major=$(echo "$version" | cut -d. -f1)
+            ln -sf "$lib_basename" "$current_build_path/lib/libconnx.$major.dylib"
+            ln -sf "$lib_basename" "$current_build_path/lib/libconnx.dylib"
+        fi
     else
+        real_lib=$(find "$current_build_path" -maxdepth 1 -name 'libconnx.so.*.*' ! -type l -print -quit)
+        if [ -n "$real_lib" ]; then
+            so_basename=$(basename "$real_lib")
+            cp "$real_lib" "$current_build_path/lib/"
+            major=$(echo "$version" | cut -d. -f1)
+            ln -sf "$so_basename" "$current_build_path/lib/libconnx.so.$major"
+            ln -sf "$so_basename" "$current_build_path/lib/libconnx.so"
+        fi
+    fi
+
+    # Fallback: static library
+    if [ -z "$(ls -A "$current_build_path/lib/" 2>/dev/null)" ]; then
         cp "$current_build_path"/libconnx.a "$current_build_path/lib/" 2>/dev/null
     fi
+
     # Create archive
     cd "$current_build_path" || exit 1
     arch=$(uname -m)
     case "$arch" in
         aarch64|arm64)
-            package_name="connx_arm_v${version}.tar.gz"
+            package_name="connx_${platform}_arm64_v${version}.tar.gz"
             ;;
         x86_64|amd64)
-            package_name="connx_linux_v${version}.tar.gz"
+            package_name="connx_${platform}_amd64_v${version}.tar.gz"
             ;;
         *)
-            package_name="connx_${arch}_v${version}.tar.gz"
+            package_name="connx_${platform}_${arch}_v${version}.tar.gz"
             ;;
     esac
 
