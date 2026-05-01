@@ -165,6 +165,9 @@ int StartEchoServer(int port) {
     {
         int opt = 1;
         setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+#ifdef SO_NOSIGPIPE
+        setsockopt(listen_fd, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+#endif
     }
 
     struct sockaddr_in addr;
