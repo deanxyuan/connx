@@ -10,7 +10,7 @@
 
 ## Features
 
-- **Cross-platform I/O** - epoll (Linux), IOCP (Windows)
+- **Cross-platform I/O** - epoll (Linux), kqueue (macOS), IOCP (Windows)
 - **C + C++ API** - Stable C ABI for FFI bindings; clean C++ virtual interface
 - **Pluggable codec** - Delimiter / FixedLength / LengthField / custom callback
 - **Connect timeout** - Configurable per-client deadline
@@ -38,13 +38,15 @@ make
 ./client_cc 127.0.0.1:9000
 ```
 
+The same example flow applies on macOS; the standalone echo server includes the required SIGPIPE protection for Darwin builds.
+
 Example source files:
 
-| File | Description |
-|----|------|
-| `example/server.cc` | Simple echo server (standalone, no connx dependency) |
-| `example/client_c.c` | Echo client using connx C API |
-| `example/client_cc.c` | Echo client using connx C++ API |
+| File                  | Description                                          |
+| --------------------- | ---------------------------------------------------- |
+| `example/server.cc`   | Simple echo server (standalone, no connx dependency) |
+| `example/client_c.c`  | Echo client using connx C API                        |
+| `example/client_cc.c` | Echo client using connx C++ API                      |
 
 ### Minimal C Usage
 
@@ -199,24 +201,24 @@ int main() {
 
 ## Codec
 
-| Codec | Description |
-|-------|-------------|
-| `connx_codec_new_delimiter('\n')` | Split by delimiter character |
-| `connx_codec_new_fixed_length(128)` | Fixed-size frames |
+| Codec                                      | Description                                       |
+| ------------------------------------------ | ------------------------------------------------- |
+| `connx_codec_new_delimiter('\n')`          | Split by delimiter character                      |
+| `connx_codec_new_fixed_length(128)`        | Fixed-size frames                                 |
 | `connx_codec_new_length_field(0, 4, 4, 1)` | Length-prefixed frames (4-byte big-endian header) |
-| `connx_codec_new_callback(fn, ud)` | Custom decode callback |
+| `connx_codec_new_callback(fn, ud)`         | Custom decode callback                            |
 
 ## Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `codec` | required | Protocol codec |
-| `connect_timeout` | 0 (none) | Connect timeout in ms |
-| `local_address` | NULL (auto) | Bind to specific local IP |
-| `tcp_nodelay` | enable | Disable Nagle's algorithm |
-| `send_buffer_size` | 0 (OS default) | Socket send buffer |
-| `recv_buffer_size` | 0 (OS default) | Socket recv buffer |
-| `linger` | -1 (disabled) | SO_LINGER timeout in seconds |
+| Option             | Default        | Description                  |
+| ------------------ | -------------- | ---------------------------- |
+| `codec`            | required       | Protocol codec               |
+| `connect_timeout`  | 0 (none)       | Connect timeout in ms        |
+| `local_address`    | NULL (auto)    | Bind to specific local IP    |
+| `tcp_nodelay`      | enable         | Disable Nagle's algorithm    |
+| `send_buffer_size` | 0 (OS default) | Socket send buffer           |
+| `recv_buffer_size` | 0 (OS default) | Socket recv buffer           |
+| `linger`           | -1 (disabled)  | SO_LINGER timeout in seconds |
 
 ## Build
 
