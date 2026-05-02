@@ -9,6 +9,9 @@
 #ifdef _WIN32
 #    include <Windows.h>
 #    include <processthreadsapi.h>
+#elif defined(__APPLE__)
+#    include <pthread.h>
+#    include <unistd.h>
 #else
 #    include <sys/syscall.h>
 #    include <unistd.h>
@@ -65,7 +68,13 @@ static std::atomic<intptr_t> g_user_data((intptr_t)0);
 static std::atomic<int> g_min_level(CONNX_LOG_LEVEL_DEBUG);
 
 #ifndef _WIN32
+#    ifdef __APPLE__
+static unsigned long GetCurrentThreadId() {
+    return static_cast<unsigned long>(pthread_mach_thread_np(pthread_self()));
+}
+#    else
 static pid_t GetCurrentThreadId() { return syscall(SYS_gettid); }
+#    endif
 #endif
 
 void connx_log_set_min_level(int level) {

@@ -41,15 +41,18 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/core CORE_SOURCE)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/net NET_SOURCE)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/utils UTILS_SOURCE)
 if(WIN32)
-    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_linux.cc)
-    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_macos.cc)
+    list(REMOVE_ITEM NET_SOURCE 
+        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_linux.cc
+        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_macos.cc)
 elseif(APPLE)
-    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_linux.cc)
-    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_win32.cc)
+    list(REMOVE_ITEM NET_SOURCE 
+        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_linux.cc
+        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_win32.cc)
 else()
-    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_win32.cc)
-    list(REMOVE_ITEM NET_SOURCE ${PROJECT_SOURCE_DIR}/src/net/clientimpl_macos.cc)
-    endif()
+    list(REMOVE_ITEM NET_SOURCE 
+        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_win32.cc
+        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_macos.cc)
+endif()
 
 # ============================================================================
 # Object Library

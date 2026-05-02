@@ -16,6 +16,7 @@ typedef int socklen_t;
 #    include <netinet/in.h>
 #    include <sys/select.h>
 #    include <sys/socket.h>
+#    include <signal.h>
 #    include <unistd.h>
 typedef int SOCKET;
 #    define INVALID_SOCKET (-1)
@@ -36,14 +37,14 @@ namespace test {
 namespace {
 
 std::atomic<bool> running_{false};
-std::thread       thread_;
-int               port_ = -1;
+std::thread thread_;
+int port_ = -1;
 
 #ifdef _WIN32
-SOCKET  listen_fd_ = INVALID_SOCKET;
-bool    wsa_ready_ = false;
+SOCKET listen_fd_ = INVALID_SOCKET;
+bool wsa_ready_ = false;
 #else
-int     listen_fd_ = INVALID_SOCKET;
+int listen_fd_ = INVALID_SOCKET;
 #endif
 
 void RunEchoLoop() {
@@ -150,6 +151,8 @@ int StartEchoServer(int port) {
         return -1;
     }
     wsa_ready_ = true;
+#else
+    signal(SIGPIPE, SIG_IGN);
 #endif
 
     SOCKET listen_fd = socket(AF_INET, SOCK_STREAM, 0);

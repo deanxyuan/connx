@@ -13,6 +13,7 @@
 #    include <sys/socket.h>
 #    include <unistd.h>
 #    include <errno.h>
+#    include <signal.h>
 #endif
 #include <string.h>
 #include <stdio.h>
@@ -46,6 +47,8 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "WSAStartup failed\n");
         return 1;
     }
+#else
+    signal(SIGPIPE, SIG_IGN);
 #endif
     SOCKET listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd == INVALID_SOCKET) {

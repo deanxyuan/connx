@@ -56,8 +56,13 @@ public:
     }
     bool WaitForClosed(int timeout_ms = 5000) {
         std::unique_lock<std::mutex> lk(mtx_);
-        return cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms),
-                            [this] { return closed_; });
+        return cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms), [this] { return closed_; });
+    }
+
+    void ResetMessageState() {
+        std::unique_lock<std::mutex> lk(mtx_);
+        received_.clear();
+        msg_count_ = 0;
     }
 
     bool connected_ = false;
@@ -127,7 +132,28 @@ TEST(IntegrationTest, connect_timeout) {
 }
 
 // ============================================================================
-// 3. Multiple concurrent clients
+// 3. Connection refused should fail without a spurious OnConnected
+// ============================================================================
+TEST(IntegrationTest, connection_refused_reports_failure_only) {
+    SyncHandler handler;
+    connx::ClientOptions opts;
+    opts.codec = new connx::DelimiterCodec('\n');
+    opts.tcp.connect_timeout_ms = 1000;
+
+    connx::Client* cli = connx::CreateClient(&handler, opts);
+    ASSERT_TRUE(cli != nullptr);
+    // Port 1 on loopback is typically closed and should fail quickly
+    ASSERT_TRUE(cli->Connect("127.0.0.1:1"));
+
+    ASSERT_TRUE(handler.WaitForConnect(3000));
+    ASSERT_TRUE(!handler.connected_);
+    ASSERT_TRUE(handler.connect_failed_);
+
+    connx::ReleaseClient(cli);
+}
+
+// ============================================================================
+// 4. Multiple concurrent clients
 // ============================================================================
 TEST(IntegrationTest, multiple_clients) {
     int port = test::StartEchoServer(0);
@@ -174,6 +200,40 @@ TEST(IntegrationTest, multiple_clients) {
     }
 
     test::StopEchoServer();
+}
+
+// ============================================================================
+// 5. Peer close should surface a single close event
+// ============================================================================
+TEST(IntegrationTest, peer_close_reports_single_close) {
+    int port = test::StartEchoServer(0);
+    ASSERT_TRUE(port > 0);
+
+    SyncHandler handler;
+    connx::ClientOptions opts;
+    opts.codec = new connx::DelimiterCodec('\n');
+
+    connx::Client* cli = connx::CreateClient(&handler, opts);
+    ASSERT_TRUE(cli != nullptr);
+
+    std::string addr = "127.0.0.1:" + std::to_string(port);
+    ASSERT_TRUE(cli->Connect(addr.c_str()));
+    ASSERT_TRUE(handler.WaitForConnect());
+    ASSERT_TRUE(handler.connected_);
+
+    const char* msg = "close-after-echo\n";
+    ASSERT_TRUE(cli->SendBuffer(msg, strlen(msg)));
+    ASSERT_TRUE(handler.WaitForMessage(1));
+    ASSERT_EQ(handler.received_, "close-after-echo\n");
+
+    handler.ResetMessageState();
+    test::StopEchoServer();
+
+    ASSERT_TRUE(handler.WaitForClosed(3000));
+    ASSERT_TRUE(handler.closed_);
+    ASSERT_TRUE(!handler.connect_failed_);
+
+    connx::ReleaseClient(cli);
 }
 
 RUN_ALL_TESTS()

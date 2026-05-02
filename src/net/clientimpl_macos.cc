@@ -4,15 +4,16 @@
  */
 
 #include "src/net/clientimpl.h"
-#include "connx/codec.h"
+
 #include <errno.h>
 #include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/event.h>
+#include <time.h>
+
+#include "connx/codec.h"
 #include "src/net/connect_timeout.h"
 #include "src/net/socket_util.h"
 #include "src/utils/status.h"
@@ -22,18 +23,6 @@
 
 static connx::internal::LibraryInitializer g_lib_initializer;
 static connx::ConnectTimeoutList g_connect_timeouts;
-
-#define MAX_KQUEUE_EVENTS 256
-static struct kevent g_kevents[MAX_KQUEUE_EVENTS];
-static int g_kqueue_fd = -1;
-static bool g_kqueue_running = false;
-static pthread_t g_kqueue_thread = 0;
-
-#define CLOSE_SOCKET(fd)                                                                           \
-    if (fd != -1) {                                                                                \
-        ::close(fd);                                                                               \
-        fd = -1;                                                                                   \
-    }
 
 /* set a socket to non blocking mode */
 connx_error connx_set_socket_nonblocking(int fd, int non_blocking) {
@@ -90,8 +79,13 @@ connx_error connx_prepare_client_socket(int fd, const connx::TcpOptions& tcp) {
     if (ret != CONNX_ERROR_NONE) goto failure;
 
 #ifdef SO_NOSIGPIPE
-    int val = 1;
-    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof(val));
+    {
+        int val = 1;
+        if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof(val)) != 0) {
+            ret = CONNX_POSIX_ERROR(errno, "setsockopt(SO_NOSIGPIPE)");
+            goto failure;
+        }
+    }
 #endif
 
     if (tcp.tcp_nodelay) {
@@ -144,6 +138,12 @@ static connx_error connx_create_client_socket(const connx_resolved_address* inpu
     return CONNX_ERROR_NONE;
 }
 
+#define MAX_KQUEUE_EVENTS 256
+static struct kevent g_kevents[MAX_KQUEUE_EVENTS];
+static int g_kqueue_fd = -1;
+static bool g_kqueue_running = false;
+static pthread_t g_kqueue_thread = 0;
+
 static connx_error KqueueInit() {
     g_kqueue_fd = kqueue();
     if (g_kqueue_fd < 0) {
@@ -158,13 +158,13 @@ static connx_error KqueueInit() {
 static int KqueueRegister(int fd, void* udata) {
     struct kevent ev[2];
     EV_SET(&ev[0], fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, udata);
-    EV_SET(&ev[1], fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, udata);
+    EV_SET(&ev[1], fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, udata);
     return kevent(g_kqueue_fd, ev, 2, NULL, 0, NULL);
 }
 
 static int KqueueEnableWrite(int fd, void* udata) {
     struct kevent ev;
-    EV_SET(&ev, fd, EVFILT_WRITE, EV_ENABLE, 0, 0, udata);
+    EV_SET(&ev, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, udata);
     return kevent(g_kqueue_fd, &ev, 1, NULL, 0, NULL);
 }
 
@@ -184,9 +184,32 @@ static int KqueueDelete(int fd) {
 static int KqueueWait(int timeout_ms) {
     struct timespec ts;
     ts.tv_sec = timeout_ms / 1000;
-    ts.tv_nsec = (timeout_ms % 1000) * 1000000;
+    ts.tv_nsec = (timeout_ms % 1000) * 1000000L;
     return kevent(g_kqueue_fd, NULL, 0, g_kevents, MAX_KQUEUE_EVENTS, &ts);
 }
+
+static int KqueueSocketError(int fd, const struct kevent* ev) {
+    int err = 0;
+    socklen_t len = sizeof(err);
+    if (fd > 0 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err != 0) {
+        return err;
+    }
+    if (ev == NULL) return err;
+    if ((ev->flags & EV_EOF) && ev->fflags != 0) {
+        return static_cast<int>(ev->fflags);
+    }
+    if ((ev->flags & EV_ERROR) && ev->data != 0) {
+        return static_cast<int>(ev->data);
+    }
+    return err;
+}
+
+#define KQUEUE_EVENT_ADDR(i) (&g_kevents[i])
+#define CLOSE_SOCKET(fd)                                                                           \
+    if ((fd) != -1) {                                                                              \
+        ::close(fd);                                                                               \
+        (fd) = -1;                                                                                 \
+    }
 
 namespace connx {
 
@@ -235,7 +258,7 @@ void* ClientImpl::PollingThread(void*) {
         int count = KqueueWait(MIN_TIME_SLICE);
 
         for (int i = 0; i < count; i++) {
-            struct kevent* ev = &g_kevents[i];
+            struct kevent* ev = KQUEUE_EVENT_ADDR(i);
             ClientImpl* connector = reinterpret_cast<ClientImpl*>(ev->udata);
 
             if (!connector) continue;
@@ -246,23 +269,35 @@ void* ClientImpl::PollingThread(void*) {
                 continue;
             }
 
-            if (ev->flags & EV_ERROR || ev->flags & EV_EOF) {
-                int err = ev->flags & EV_ERROR ? static_cast<int>(ev->data) : 0;
-                connector->OnErrorEvent(internal::kErrorEvent, err);
-                connector->Unref();
-                continue;
-            }
-
             if (!connector->is_connected_) {
+                int err = KqueueSocketError(connector->fd_, ev);
+                if (err != 0) {
+                    connector->OnErrorEvent(internal::kConnectEvent, err);
+                    connector->Unref();
+                    continue;
+                }
                 connector->last_recv_time_ = GetCurrentMillisec();
                 connector->last_send_time_ = connector->last_recv_time_;
                 connector->OnConnected();
             }
 
+            if (ev->flags & EV_ERROR) {
+                int err = static_cast<int>(ev->data);
+                connector->OnErrorEvent(internal::kErrorEvent, err);
+                connector->Unref();
+                continue;
+            }
+
+            if (ev->flags & EV_EOF) {
+                int err = KqueueSocketError(connector->fd_, ev);
+                connector->OnErrorEvent(internal::kErrorEvent, err);
+                connector->Unref();
+                continue;
+            }
+
             if (ev->filter == EVFILT_READ) {
                 connector->OnRecvEvent();
-            }
-            if (ev->filter == EVFILT_WRITE) {
+            } else if (ev->filter == EVFILT_WRITE) {
                 connector->OnSendEvent();
             }
             connector->Unref();
@@ -456,6 +491,8 @@ void ClientImpl::OnSendEvent() {
     }
     if (send_buffer_.Empty()) {
         KqueueDisableWrite(fd_, this);
+    } else {
+        KqueueEnableWrite(fd_, this);
     }
 }
 
@@ -466,6 +503,8 @@ void ClientImpl::OnRecvEvent() {
     }
     if (send_buffer_.Empty()) {
         KqueueDisableWrite(fd_, this);
+    } else {
+        KqueueEnableWrite(fd_, this);
     }
 }
 
@@ -518,4 +557,15 @@ int ClientImpl::SendImpl() {
     return 0;
 }
 
+bool ClientImpl::ReleasePollRef() {
+    if (poll_registered_.exchange(false, std::memory_order_acq_rel)) {
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+        Unref();
+        return true;
+    }
+    return false;
+}
 } // namespace connx
