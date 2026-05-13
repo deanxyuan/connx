@@ -13,8 +13,9 @@ namespace connx {
 void ClientImpl::SetOptions(const ClientOptions& opts) { opt_ = opts; }
 void ClientImpl::GetMetrics(Metrics* out_metrics) const {
     if (out_metrics == nullptr) return;
-    out_metrics->state =
-        is_connected_ ? ConnectionState::kConnected : ConnectionState::kDisconnected;
+    out_metrics->state = state_.load(std::memory_order_acquire) == ConnState::kConnected
+                             ? ConnectionState::kConnected
+                             : ConnectionState::kDisconnected;
     out_metrics->bytes_sent = number_of_bytes_sent_;
     out_metrics->bytes_received = number_of_bytes_received_;
     out_metrics->pending_bytes = send_buffer_.GetBufferLength();
@@ -47,6 +48,8 @@ void ClientImpl::BeforeStartWorkThread() {
     last_send_time_ = GetCurrentMillisec();
     last_recv_time_ = 0;
     msg_count_.Store(0);
+    state_.store(ConnState::kIdle, std::memory_order_release);
+    is_connected_.store(false, std::memory_order_release);
     shutdown_ = false;
 
     try {
@@ -61,9 +64,11 @@ void ClientImpl::BeforeStartWorkThread() {
     }
 }
 
-bool ClientImpl::IsConnected() const { return is_connected_; }
+bool ClientImpl::IsConnected() const {
+    return state_.load(std::memory_order_acquire) == ConnState::kConnected;
+}
 bool ClientImpl::IsConnecting() const {
-    return connect_deadline_ != 0 && !is_connected_ && !shutdown_;
+    return state_.load(std::memory_order_acquire) == ConnState::kConnecting && !shutdown_;
 }
 
 void ClientImpl::TransferData(const Slice& s) {
@@ -73,11 +78,42 @@ void ClientImpl::TransferData(const Slice& s) {
     PostEventNode(obj);
 }
 void ClientImpl::OnConnected() {
+    ConnState expected = ConnState::kConnecting;
+    if (!state_.compare_exchange_strong(expected, ConnState::kConnected,
+                                        std::memory_order_acq_rel)) {
+        return;
+    }
     ClearConnectDeadline(this);
-    is_connected_ = true;
+    is_connected_.store(true, std::memory_order_release);
     auto obj = new ClientImpl::EventNode;
     obj->ev = NetEvent::kConnectSuccess;
     PostEventNode(obj);
+}
+
+bool ClientImpl::TryStartConnect() {
+    if (shutdown_) return false;
+    ConnState expected = ConnState::kIdle;
+    return state_.compare_exchange_strong(expected, ConnState::kConnecting,
+                                          std::memory_order_acq_rel);
+}
+
+bool ClientImpl::BeginCloseState(bool* was_connected) {
+    if (shutdown_) return false;
+    ConnState previous = state_.exchange(ConnState::kClosing, std::memory_order_acq_rel);
+    if (previous == ConnState::kIdle || previous == ConnState::kClosing) {
+        return false;
+    }
+    if (was_connected != nullptr) {
+        *was_connected = (previous == ConnState::kConnected);
+    }
+    ClearConnectDeadline(this);
+    is_connected_.store(true, std::memory_order_release);
+    return true;
+}
+
+void ClientImpl::FinishClosedState() {
+    is_connected_.store(false, std::memory_order_release);
+    state_.store(ConnState::kIdle, std::memory_order_release);
 }
 
 void ClientImpl::ParsingProtocol() {

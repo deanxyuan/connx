@@ -17,6 +17,16 @@ static connx::ConnectTimeoutList g_connect_timeouts;
 static LPFN_CONNECTEX g_connectex = nullptr;
 static connx::AtomicBool g_connectex_lock{false};
 
+namespace {
+enum class PollCmdType : uint8_t { kEnableWrite = 0, kBeginClose };
+constexpr ULONG_PTR kControlCompletionKey = 1;
+struct PollCmd {
+    OVERLAPPED overlapped;
+    PollCmdType type;
+    connx::ClientImpl* impl;
+};
+} // namespace
+
 static connx_error connx_get_connectex(SOCKET s) {
     // Fast path: already cached
     if (g_connectex) {
@@ -106,7 +116,6 @@ static connx_error connx_prepare_client_socket(SOCKET fd, const connx::TcpOption
 struct OverlappedEx {
     OVERLAPPED overlapped;
     int event_type;
-    SOCKET fd;
 };
 
 static bool g_iocp_running = false;
@@ -136,6 +145,12 @@ static inline bool IocpPolling(DWORD* NumberOfBytesTransferred, PULONG_PTR Compl
     return (r != FALSE);
 }
 
+static inline bool IocpPost(ULONG_PTR CompletionKey, LPOVERLAPPED lpOverlapped) {
+    if (g_iocp_handle == NULL) return false;
+    BOOL r = PostQueuedCompletionStatus(g_iocp_handle, 0, CompletionKey, lpOverlapped);
+    return (r != FALSE);
+}
+
 #define CLOSE_HANDLE(h)                                                                            \
     if (h != NULL) {                                                                               \
         CloseHandle(h);                                                                            \
@@ -149,6 +164,18 @@ static inline bool IocpPolling(DWORD* NumberOfBytesTransferred, PULONG_PTR Compl
     }
 
 namespace connx {
+static void QueuePollCmd(PollCmdType type, ClientImpl* impl) {
+    if (impl == nullptr || g_iocp_handle == NULL) return;
+    auto cmd = new PollCmd;
+    memset(&cmd->overlapped, 0, sizeof(cmd->overlapped));
+    cmd->type = type;
+    cmd->impl = impl;
+    impl->Ref();
+    if (!IocpPost(kControlCompletionKey, &cmd->overlapped)) {
+        impl->Unref();
+        delete cmd;
+    }
+}
 
 connx_error ClientImpl::Init() {
     connx_error r = IocpCreate();
@@ -175,20 +202,59 @@ void ClientImpl::ClearConnectDeadline(ClientImpl* impl) {
 
 void ClientImpl::Shutdown() {
     g_iocp_running = false;
+    IocpPost(kControlCompletionKey, NULL);
+    if (g_iocp_thread != NULL) {
+        WaitForSingleObject(g_iocp_thread, 3000);
+    }
     CLOSE_HANDLE(g_iocp_handle);
     CLOSE_HANDLE(g_iocp_thread);
 }
 
+void ClientImpl::ProcessPollCommands(void* overlapped) {
+    if (overlapped == nullptr) return;
+
+    auto cmd = reinterpret_cast<PollCmd*>(overlapped);
+    ClientImpl* impl = cmd->impl;
+    switch (cmd->type) {
+    case PollCmdType::kEnableWrite:
+        if (!impl->shutdown_) {
+            impl->AsyncSend();
+        }
+        break;
+    case PollCmdType::kBeginClose:
+        if (impl->fd_ != INVALID_SOCKET && impl->poll_registered_.load(std::memory_order_acquire)) {
+            CancelIoEx((HANDLE)impl->fd_, NULL);
+        }
+        impl->ReleasePollRef();
+        break;
+    }
+    impl->Unref();
+    delete cmd;
+}
+
 DWORD ClientImpl::PollingThread(void*) {
-    while (g_iocp_running) {
+    for (;;) {
 
         DWORD NumberOfBytesTransferred = 0;
-        void* CompletionKey = NULL;
+        ULONG_PTR CompletionKey = 0;
         LPOVERLAPPED lpOverlapped = NULL;
 
         // https://docs.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-getqueuedcompletionstatus
-        bool ret = IocpPolling(&NumberOfBytesTransferred, (PULONG_PTR)&CompletionKey, &lpOverlapped,
-                               MIN_TIME_SLICE);
+        bool ret =
+            IocpPolling(&NumberOfBytesTransferred, &CompletionKey, &lpOverlapped, MIN_TIME_SLICE);
+
+        if (CompletionKey == kControlCompletionKey && lpOverlapped == NULL) {
+            g_connect_timeouts.CheckTimeouts();
+            if (!g_iocp_running) {
+                break;
+            }
+            continue;
+        }
+        if (CompletionKey == kControlCompletionKey && lpOverlapped != NULL) {
+            ProcessPollCommands((void*)lpOverlapped);
+            g_connect_timeouts.CheckTimeouts();
+            continue;
+        }
 
         if (!ret) {
             /*
@@ -211,7 +277,7 @@ DWORD ClientImpl::PollingThread(void*) {
                         lpOverlapped. To get extended error information, call GetLastError.
             */
 
-            if (lpOverlapped != NULL && CompletionKey != NULL) {
+            if (lpOverlapped != NULL && CompletionKey != 0) {
                 // Maybe an error occurred or the connection was closed
 
                 OverlappedEx* olex = (OverlappedEx*)lpOverlapped;
@@ -237,7 +303,8 @@ DWORD ClientImpl::PollingThread(void*) {
         connector->Ref();
         connector->DecIoPendingCounts();
 
-        if (!connector->is_connected_ && olex->event_type & internal::kConnectEvent) {
+        if (connector->state_.load(std::memory_order_acquire) == ConnState::kConnecting &&
+            olex->event_type & internal::kConnectEvent) {
             if (!connector->AsyncRecv()) {
                 connector->OnErrorEvent(internal::kRecvEvent, WSAGetLastError());
             } else {
@@ -262,6 +329,7 @@ DWORD ClientImpl::PollingThread(void*) {
 ClientImpl::ClientImpl()
     : service_(nullptr)
     , shutdown_(true)
+    , state_(ConnState::kIdle)
     , is_connected_(false)
     , poll_registered_(false)
     , fd_(INVALID_SOCKET)
@@ -319,14 +387,8 @@ void ClientImpl::Stop() {
     if (!shutdown_) {
         CONNX_LOG_DEBUG("client shutdown...");
         shutdown_ = true;
-        ClearConnectDeadline(this);
-        CancelIoEx((HANDLE)fd_, NULL);
-        {
-            std::unique_lock<std::mutex> lck(emtx_);
-            cve_.wait_for(lck, std::chrono::milliseconds(MIN_TIME_SLICE * 2),
-                          [this]() -> bool { return pending_io_.Load() == 0; });
-        }
-        is_connected_ = false;
+        BeginCloseState(nullptr);
+        QueuePollCmd(PollCmdType::kBeginClose, this);
         cv_.notify_one();
 
         if (thd_.joinable()) {
@@ -343,23 +405,21 @@ void ClientImpl::Stop() {
         msg_count_.Store(0);
         recv_buffer_.ClearBuffer();
         send_buffer_.ClearBuffer();
-        ReleasePollRef();
+        FinishClosedState();
     }
 }
 void ClientImpl::Disconnect() {
-    if (fd_ == INVALID_SOCKET || !is_connected_) return;
-    CancelIoEx((HANDLE)fd_, NULL);
-    {
-        std::unique_lock<std::mutex> lck(emtx_);
-        cve_.wait_for(lck, std::chrono::milliseconds(MIN_TIME_SLICE * 2),
-                      [this]() -> bool { return pending_io_.Load() == 0; });
-    }
-    // is_connected_ = false; // managed by OnErrorEvent
-    ReleasePollRef();
+    bool was_connected = false;
+    if (!BeginCloseState(&was_connected)) return;
+    QueuePollCmd(PollCmdType::kBeginClose, this);
+    FinishClosedState();
 }
 
 connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
     if (shutdown_) return CONNX_ERROR_FROM_STATIC_STRING("client has been shutdown");
+    if (!TryStartConnect()) {
+        return CONNX_ERROR_FROM_STATIC_STRING("the socket is busy");
+    }
 
     connx_resolved_address local;
     SOCKET fd;
@@ -405,8 +465,7 @@ connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
         fd_ = INVALID_SOCKET;
         poll_registered_.store(false, std::memory_order_release);
         Unref();
-        closesocket(fd);
-        return ret;
+        goto failure;
     }
     if (opt_.tcp.connect_timeout_ms > 0) {
         connect_deadline_ = GetCurrentMillisec() + opt_.tcp.connect_timeout_ms;
@@ -435,6 +494,7 @@ failure:
         closesocket(fd);
     }
     fd_ = INVALID_SOCKET;
+    FinishClosedState();
     return ret;
 }
 bool ClientImpl::SendMsg(const Slice& msg) {
@@ -443,7 +503,8 @@ bool ClientImpl::SendMsg(const Slice& msg) {
     }
     std::unique_lock<std::mutex> g(smtx_);
     send_buffer_.AddSlice(msg);
-    return AsyncSend();
+    QueuePollCmd(PollCmdType::kEnableWrite, this);
+    return true;
 }
 bool ClientImpl::SendMsg(Slice&& msg) {
     if (shutdown_ || msg.empty()) {
@@ -451,20 +512,15 @@ bool ClientImpl::SendMsg(Slice&& msg) {
     }
     std::unique_lock<std::mutex> g(smtx_);
     send_buffer_.AddSlice(std::move(msg));
-    return AsyncSend();
+    QueuePollCmd(PollCmdType::kEnableWrite, this);
+    return true;
 }
 
 void ClientImpl::OnErrorEvent(int event_type, int err) {
-    // clean up connection resources
-    ClearConnectDeadline(this);
-
-    if (!ReleasePollRef()) {
-        // fd has already been released, event has already been sent
-        return;
-    }
-
-    // CAS: only the first caller can obtain the old connection state
-    bool was_connected = is_connected_.exchange(false);
+    bool was_connected = false;
+    if (!BeginCloseState(&was_connected)) return;
+    QueuePollCmd(PollCmdType::kBeginClose, this);
+    FinishClosedState();
     auto obj = new ClientImpl::EventNode;
     if (err != 0) {
         CONNX_LOG_DEBUG("client error event.type:%d,err:%d", event_type, err);

@@ -29,6 +29,7 @@ struct OverlappedEx;
 #define MIN_TIME_SLICE  300
 namespace connx {
 enum class NetEvent : int { kNull = 0, kConnectFailed, kConnectSuccess, kClosed };
+enum class ConnState : int { kIdle = 0, kConnecting, kConnected, kClosing };
 
 namespace internal {
 constexpr int kErrorEvent = 1 << 0;
@@ -71,6 +72,9 @@ public:
 private:
     void BeforeStartWorkThread();
     connx_error ConnectImpl(const connx_resolved_address* addr);
+    bool TryStartConnect();
+    bool BeginCloseState(bool* was_connected);
+    void FinishClosedState();
     void OnErrorEvent(int event_type, int err);
 #ifdef _WIN32
 #    ifdef WIN64
@@ -78,6 +82,7 @@ private:
 #    else
     static DWORD __stdcall PollingThread(void*);
 #    endif
+    static void ProcessPollCommands(void* overlapped);
 
     void OnSendEvent(DWORD bytes);
     void OnRecvEvent(DWORD bytes);
@@ -89,6 +94,7 @@ private:
     void DecIoPendingCounts();
 #else
     static void* PollingThread(void*);
+    static void ProcessPollCommands();
     void OnSendEvent();
     void OnRecvEvent();
     int RecvImpl();
@@ -109,6 +115,7 @@ private:
 private:
     ClientHandler* service_;
     std::atomic<bool> shutdown_;
+    std::atomic<ConnState> state_;
     std::atomic<bool> is_connected_;
     std::atomic<bool> poll_registered_;
 #ifdef _WIN32

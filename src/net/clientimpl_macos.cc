@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/event.h>
+#include <sys/eventfd.h>
 #include <time.h>
 
 #include "connx/codec.h"
@@ -23,6 +24,34 @@
 
 static connx::internal::LibraryInitializer g_lib_initializer;
 static connx::ConnectTimeoutList g_connect_timeouts;
+
+#define CLOSE_SOCKET(fd)                                                                           \
+    if ((fd) != -1) {                                                                              \
+        ::close(fd);                                                                               \
+        (fd) = -1;                                                                                 \
+    }
+
+namespace {
+enum class PollCmdType : uint8_t { kEnableWrite = 0, kDisableWrite, kBeginClose };
+struct PollCmd {
+    connx::MultiProducerSingleConsumerQueue::Node node;
+    PollCmdType type;
+    connx::ClientImpl* impl;
+};
+static connx::MultiProducerSingleConsumerQueue g_poll_cmdq;
+static int g_poll_ctl_fd = -1;
+static void PollerNotify() {
+    uint64_t one = 1;
+    if (g_poll_ctl_fd >= 0) {
+        ::write(g_poll_ctl_fd, &one, sizeof(one));
+    }
+}
+static void DrainPollerNotify() {
+    uint64_t value = 0;
+    while (::read(g_poll_ctl_fd, &value, sizeof(value)) > 0) {
+    }
+}
+} // namespace
 
 /* set a socket to non blocking mode */
 connx_error connx_set_socket_nonblocking(int fd, int non_blocking) {
@@ -152,6 +181,19 @@ static connx_error KqueueInit() {
     if (fcntl(g_kqueue_fd, F_SETFD, FD_CLOEXEC) != 0) {
         return CONNX_SYSTEM_ERROR(errno, "fcntl");
     }
+    g_poll_ctl_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (g_poll_ctl_fd < 0) {
+        CLOSE_SOCKET(g_kqueue_fd);
+        return CONNX_SYSTEM_ERROR(errno, "eventfd");
+    }
+    struct kevent ctl_ev;
+    EV_SET(&ctl_ev, g_poll_ctl_fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, NULL);
+    if (kevent(g_kqueue_fd, &ctl_ev, 1, NULL, 0, NULL) != 0) {
+        int err = errno;
+        CLOSE_SOCKET(g_poll_ctl_fd);
+        CLOSE_SOCKET(g_kqueue_fd);
+        return CONNX_SYSTEM_ERROR(err, "kevent(control)");
+    }
     return CONNX_ERROR_NONE;
 }
 
@@ -205,13 +247,17 @@ static int KqueueSocketError(int fd, const struct kevent* ev) {
 }
 
 #define KQUEUE_EVENT_ADDR(i) (&g_kevents[i])
-#define CLOSE_SOCKET(fd)                                                                           \
-    if ((fd) != -1) {                                                                              \
-        ::close(fd);                                                                               \
-        (fd) = -1;                                                                                 \
-    }
 
 namespace connx {
+static void QueuePollCmd(PollCmdType type, ClientImpl* impl) {
+    if (impl == nullptr) return;
+    auto cmd = new PollCmd;
+    cmd->type = type;
+    cmd->impl = impl;
+    impl->Ref();
+    g_poll_cmdq.push(&cmd->node);
+    PollerNotify();
+}
 
 connx_error ClientImpl::Init() {
     connx_error r = KqueueInit();
@@ -244,21 +290,59 @@ void ClientImpl::ClearConnectDeadline(ClientImpl* impl) {
 void ClientImpl::Shutdown() {
     g_kqueue_running = false;
 
-    CLOSE_SOCKET(g_kqueue_fd);
+    PollerNotify();
 
     if (g_kqueue_thread) {
         pthread_join(g_kqueue_thread, NULL);
         g_kqueue_thread = 0;
     }
+
+    CLOSE_SOCKET(g_poll_ctl_fd);
+    CLOSE_SOCKET(g_kqueue_fd);
 }
 
+void ClientImpl::ProcessPollCommands() {
+    for (;;) {
+        auto cmd = reinterpret_cast<PollCmd*>(g_poll_cmdq.pop());
+        if (cmd == nullptr) break;
+
+        ClientImpl* impl = cmd->impl;
+        switch (cmd->type) {
+        case PollCmdType::kEnableWrite:
+            if (!impl->shutdown_ && impl->fd_ >= 0 &&
+                impl->poll_registered_.load(std::memory_order_acquire)) {
+                KqueueEnableWrite(impl->fd_, impl);
+            }
+            break;
+        case PollCmdType::kDisableWrite:
+            if (!impl->shutdown_ && impl->fd_ >= 0 &&
+                impl->poll_registered_.load(std::memory_order_acquire)) {
+                KqueueDisableWrite(impl->fd_, impl);
+            }
+            break;
+        case PollCmdType::kBeginClose:
+            if (impl->fd_ >= 0 && impl->poll_registered_.load(std::memory_order_acquire)) {
+                KqueueDelete(impl->fd_);
+            }
+            impl->ReleasePollRef();
+            break;
+        }
+        impl->Unref();
+        delete cmd;
+    }
+}
 void* ClientImpl::PollingThread(void*) {
-    while (g_kqueue_running) {
+    do {
 
         int count = KqueueWait(MIN_TIME_SLICE);
 
         for (int i = 0; i < count; i++) {
             struct kevent* ev = KQUEUE_EVENT_ADDR(i);
+            if (ev->udata == NULL && static_cast<int>(ev->ident) == g_poll_ctl_fd) {
+                DrainPollerNotify();
+                ProcessPollCommands();
+                continue;
+            }
             ClientImpl* connector = reinterpret_cast<ClientImpl*>(ev->udata);
 
             if (!connector) continue;
@@ -269,7 +353,7 @@ void* ClientImpl::PollingThread(void*) {
                 continue;
             }
 
-            if (!connector->is_connected_) {
+            if (connector->state_.load(std::memory_order_acquire) == ConnState::kConnecting) {
                 int err = KqueueSocketError(connector->fd_, ev);
                 if (err != 0) {
                     connector->OnErrorEvent(internal::kConnectEvent, err);
@@ -302,14 +386,17 @@ void* ClientImpl::PollingThread(void*) {
             }
             connector->Unref();
         }
+        ProcessPollCommands();
         g_connect_timeouts.CheckTimeouts();
-    }
+    } while (g_kqueue_running);
+    ProcessPollCommands();
     return NULL;
 }
 
 ClientImpl::ClientImpl()
     : service_(nullptr)
     , shutdown_(true)
+    , state_(ConnState::kIdle)
     , is_connected_(false)
     , poll_registered_(false)
     , fd_(-1)
@@ -343,9 +430,8 @@ void ClientImpl::Stop() {
     if (!shutdown_) {
         CONNX_LOG_DEBUG("client shutdown...");
         shutdown_ = true;
-        ClearConnectDeadline(this);
-        KqueueDelete(fd_);
-        is_connected_ = false;
+        BeginCloseState(nullptr);
+        QueuePollCmd(PollCmdType::kBeginClose, this);
         cv_.notify_one();
 
         if (thd_.joinable()) {
@@ -362,7 +448,7 @@ void ClientImpl::Stop() {
         msg_count_.Store(0);
         recv_buffer_.ClearBuffer();
         send_buffer_.ClearBuffer();
-        ReleasePollRef();
+        FinishClosedState();
     }
 }
 
@@ -370,10 +456,14 @@ connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
     if (fd_ != -1) {
         return CONNX_ERROR_FROM_STATIC_STRING("the socket has not been closed");
     }
+    if (!TryStartConnect()) {
+        return CONNX_ERROR_FROM_STATIC_STRING("the socket is busy");
+    }
 
     int sock_fd = -1;
     connx_error ret = connx_create_client_socket(addr, &sock_fd, opt_.tcp);
     if (ret != CONNX_ERROR_NONE) {
+        FinishClosedState();
         return ret;
     }
 
@@ -381,11 +471,13 @@ connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
         connx_resolved_address local_addr;
         if (!connx_string_to_sockaddr(&local_addr, opt_.local_address, 0)) {
             CLOSE_SOCKET(sock_fd);
+            FinishClosedState();
             return CONNX_ERROR_FROM_STATIC_STRING("invalid local address");
         }
         if (bind(sock_fd, (const connx_sockaddr*)local_addr.addr, local_addr.len) != 0) {
             ret = CONNX_SYSTEM_ERROR(errno, "bind");
             CLOSE_SOCKET(sock_fd);
+            FinishClosedState();
             return ret;
         }
     }
@@ -407,6 +499,7 @@ connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
         }
         ret = CONNX_SYSTEM_ERROR(errno, "connect");
         CLOSE_SOCKET(sock_fd);
+        FinishClosedState();
         return ret;
     }
     Ref();
@@ -418,6 +511,7 @@ connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
         poll_registered_.store(false, std::memory_order_release);
         Unref();
         ::close(sock_fd);
+        FinishClosedState();
         return ret;
     }
 
@@ -425,19 +519,18 @@ connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
 }
 
 void ClientImpl::Disconnect() {
-    if (fd_ == -1 || !is_connected_) return;
-    KqueueDelete(fd_);
-    ReleasePollRef();
+    bool was_connected = false;
+    if (!BeginCloseState(&was_connected)) return;
+    QueuePollCmd(PollCmdType::kBeginClose, this);
+    FinishClosedState();
 }
 
 void ClientImpl::OnErrorEvent(int event_type, int err) {
-    ClearConnectDeadline(this);
+    bool was_connected = false;
+    if (!BeginCloseState(&was_connected)) return;
+    QueuePollCmd(PollCmdType::kBeginClose, this);
+    FinishClosedState();
 
-    if (!ReleasePollRef()) {
-        return;
-    }
-
-    bool was_connected = is_connected_.exchange(false);
     auto obj = new ClientImpl::EventNode;
     if (err != 0) {
         CONNX_LOG_DEBUG("client error event.type:%d,err:%d", event_type, err);
@@ -452,25 +545,13 @@ void ClientImpl::OnErrorEvent(int event_type, int err) {
     PostEventNode(obj);
 }
 
-bool ClientImpl::ReleasePollRef() {
-    if (poll_registered_.exchange(false, std::memory_order_acq_rel)) {
-        if (fd_ >= 0) {
-            ::close(fd_);
-            fd_ = -1;
-        }
-        Unref();
-        return true;
-    }
-    return false;
-}
-
 bool ClientImpl::SendMsg(const Slice& msg) {
     if (shutdown_ || msg.empty()) {
         return false;
     }
     std::unique_lock<std::mutex> g(smtx_);
     send_buffer_.AddSlice(msg);
-    KqueueEnableWrite(fd_, this);
+    QueuePollCmd(PollCmdType::kEnableWrite, this);
     return true;
 }
 bool ClientImpl::SendMsg(Slice&& msg) {
@@ -479,7 +560,7 @@ bool ClientImpl::SendMsg(Slice&& msg) {
     }
     std::unique_lock<std::mutex> g(smtx_);
     send_buffer_.AddSlice(std::move(msg));
-    KqueueEnableWrite(fd_, this);
+    QueuePollCmd(PollCmdType::kEnableWrite, this);
     return true;
 }
 
@@ -490,9 +571,9 @@ void ClientImpl::OnSendEvent() {
         return;
     }
     if (send_buffer_.Empty()) {
-        KqueueDisableWrite(fd_, this);
+        QueuePollCmd(PollCmdType::kDisableWrite, this);
     } else {
-        KqueueEnableWrite(fd_, this);
+        QueuePollCmd(PollCmdType::kEnableWrite, this);
     }
 }
 
@@ -501,10 +582,11 @@ void ClientImpl::OnRecvEvent() {
         OnErrorEvent(internal::kRecvEvent, errno);
         return;
     }
+    std::unique_lock<std::mutex> g(smtx_);
     if (send_buffer_.Empty()) {
-        KqueueDisableWrite(fd_, this);
+        QueuePollCmd(PollCmdType::kDisableWrite, this);
     } else {
-        KqueueEnableWrite(fd_, this);
+        QueuePollCmd(PollCmdType::kEnableWrite, this);
     }
 }
 
