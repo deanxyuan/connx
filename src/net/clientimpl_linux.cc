@@ -211,6 +211,18 @@ static int EpollWait(int timeout_ms) {
     return epoll_wait(g_epoll_fd, g_epoll_events, MAX_EPOLL_EVENTS, timeout_ms);
 }
 
+static int EpollSocketError(int fd) {
+    int err = 0;
+    socklen_t len = sizeof(err);
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+    return err;
+}
+
+static int EpollEventError(int fd) {
+    int err = EpollSocketError(fd);
+    return err != 0 ? err : ECONNRESET;
+}
+
 #define EPOLL_EVENT_ADDR(i) (&g_epoll_events[i])
 namespace connx {
 static void QueuePollCmd(PollCmdType type, ClientImpl* impl) {
@@ -315,16 +327,25 @@ void* ClientImpl::PollingThread(void*) {
                 connector->Unref();
                 continue;
             }
-            if (ev->events & EPOLLERR || ev->events & EPOLLHUP || ev->events & EPOLLRDHUP) {
-                connector->OnErrorEvent(internal::kErrorEvent, errno);
-                connector->Unref();
-                continue;
-            }
 
+            const bool has_error_event = (ev->events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) != 0;
             if (connector->state_.load(std::memory_order_acquire) == ConnState::kConnecting) {
+                int err = EpollSocketError(connector->fd_);
+                if (err != 0 || has_error_event) {
+                    if (err == 0) err = ECONNRESET;
+                    connector->OnErrorEvent(internal::kConnectEvent, err);
+                    connector->Unref();
+                    continue;
+                }
                 connector->last_recv_time_ = GetCurrentMillisec();
                 connector->last_send_time_ = connector->last_recv_time_;
                 connector->OnConnected();
+            }
+
+            if (has_error_event) {
+                connector->OnErrorEvent(internal::kErrorEvent, EpollEventError(connector->fd_));
+                connector->Unref();
+                continue;
             }
 
             if (ev->events & EPOLLIN) {
