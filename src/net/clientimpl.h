@@ -6,11 +6,13 @@
 #ifndef CONNX_SRC_NET_CONNECTIMPL_H_
 #define CONNX_SRC_NET_CONNECTIMPL_H_
 
+#include <stdint.h>
 #include <mutex>
 #include <condition_variable>
 #include <functional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 #include "connx/client.h"
 #include "src/core/library.h"
@@ -28,8 +30,10 @@ struct OverlappedEx;
 #define RECV_CACHE_SIZE 65536
 #define MIN_TIME_SLICE  300
 namespace connx {
+class ClientImpl;
+using SessionId = uintptr_t;
 enum class NetEvent : int { kNull = 0, kConnectFailed, kConnectSuccess, kClosed };
-enum class ConnState : int { kIdle = 0, kConnecting, kConnected, kClosing };
+enum class ConnState : uint8_t { kIdle = 0, kConnecting, kConnected, kClosing };
 
 namespace internal {
 constexpr int kErrorEvent = 1 << 0;
@@ -37,6 +41,20 @@ constexpr int kSendEvent = 1 << 1;
 constexpr int kRecvEvent = 1 << 2;
 constexpr int kConnectEvent = 1 << 3;
 } // namespace internal
+
+class SessionRegistry {
+public:
+    SessionId Register(ClientImpl* impl);
+    ClientImpl* Acquire(SessionId session_id);
+    ClientImpl* Unregister(SessionId session_id);
+
+private:
+    std::mutex mtx_;
+    SessionId next_id_ = 1;
+    std::unordered_map<SessionId, ClientImpl*> sessions_;
+};
+
+SessionRegistry& GetSessionRegistry();
 
 class ClientImpl : public LibraryInitService, public RefCounted<ClientImpl> {
 
@@ -72,17 +90,17 @@ public:
 private:
     void BeforeStartWorkThread();
     connx_error ConnectImpl(const connx_resolved_address* addr);
+    void OnErrorEvent(int event_type, int err);
     bool TryStartConnect();
     bool BeginCloseState(bool* was_connected);
+    ClientImpl* DetachSession();
     void FinishClosedState();
-    void OnErrorEvent(int event_type, int err);
 #ifdef _WIN32
 #    ifdef WIN64
     static DWORD PollingThread(void*);
 #    else
     static DWORD __stdcall PollingThread(void*);
 #    endif
-    static void ProcessPollCommands(void* overlapped);
 
     void OnSendEvent(DWORD bytes);
     void OnRecvEvent(DWORD bytes);
@@ -94,7 +112,6 @@ private:
     void DecIoPendingCounts();
 #else
     static void* PollingThread(void*);
-    static void ProcessPollCommands();
     void OnSendEvent();
     void OnRecvEvent();
     int RecvImpl();
@@ -118,6 +135,7 @@ private:
     std::atomic<ConnState> state_;
     std::atomic<bool> is_connected_;
     std::atomic<bool> poll_registered_;
+    std::atomic<SessionId> session_id_;
 #ifdef _WIN32
     SOCKET fd_;
 #else

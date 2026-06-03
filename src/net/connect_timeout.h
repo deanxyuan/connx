@@ -11,18 +11,19 @@
 #include <mutex>
 #include <vector>
 
+#include "src/net/clientimpl.h"
+
 namespace connx {
-class ClientImpl;
 
 class ConnectTimeoutList {
 private:
     std::mutex mtx_;
-    std::vector<ClientImpl*> pending_;
+    std::vector<SessionId> pending_;
     std::atomic<int> count_{0};
 
 public:
-    void Register(ClientImpl*);
-    void Unregister(ClientImpl*);
+    void Register(SessionId session_id);
+    void Unregister(SessionId session_id);
     void CheckTimeouts();
 };
 

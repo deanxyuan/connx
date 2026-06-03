@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/eventfd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -23,34 +22,6 @@
 
 static connx::internal::LibraryInitializer g_lib_initializer;
 static connx::ConnectTimeoutList g_connect_timeouts;
-
-#define CLOSE_SOCKET(fd)                                                                           \
-    if (fd != -1) {                                                                                \
-        ::close(fd);                                                                               \
-        fd = -1;                                                                                   \
-    }
-
-namespace {
-enum class PollCmdType : uint8_t { kEnableWrite = 0, kDisableWrite, kBeginClose };
-struct PollCmd {
-    connx::MultiProducerSingleConsumerQueue::Node node;
-    PollCmdType type;
-    connx::ClientImpl* impl;
-};
-static connx::MultiProducerSingleConsumerQueue g_poll_cmdq;
-static int g_poll_ctl_fd = -1;
-static void PollerNotify() {
-    uint64_t one = 1;
-    if (g_poll_ctl_fd >= 0) {
-        ::write(g_poll_ctl_fd, &one, sizeof(one));
-    }
-}
-static void DrainPollerNotify() {
-    uint64_t value = 0;
-    while (::read(g_poll_ctl_fd, &value, sizeof(value)) > 0) {
-    }
-}
-} // namespace
 
 /* set a socket to non blocking mode */
 connx_error connx_set_socket_nonblocking(int fd, int non_blocking) {
@@ -169,34 +140,20 @@ static connx_error EpollInit() {
     if (fcntl(g_epoll_fd, F_SETFD, FD_CLOEXEC) != 0) {
         return CONNX_SYSTEM_ERROR(errno, "fcntl");
     }
-    g_poll_ctl_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (g_poll_ctl_fd < 0) {
-        CLOSE_SOCKET(g_epoll_fd);
-        return CONNX_SYSTEM_ERROR(errno, "eventfd");
-    }
-    epoll_event ctl_ev;
-    ctl_ev.data.ptr = nullptr;
-    ctl_ev.events = EPOLLIN;
-    if (epoll_ctl(g_epoll_fd, EPOLL_CTL_ADD, g_poll_ctl_fd, &ctl_ev) != 0) {
-        int err = errno;
-        CLOSE_SOCKET(g_poll_ctl_fd);
-        CLOSE_SOCKET(g_epoll_fd);
-        return CONNX_SYSTEM_ERROR(err, "epoll_ctl(control)");
-    }
     return CONNX_ERROR_NONE;
 }
 
-static int EpollAdd(int fd, void* data, uint32_t events) {
+static int EpollAdd(int fd, connx::SessionId session_id, uint32_t events) {
     epoll_event ev;
     ev.events = events;
-    ev.data.ptr = data;
+    ev.data.u64 = static_cast<uint64_t>(session_id);
     return epoll_ctl(g_epoll_fd, EPOLL_CTL_ADD, fd, &ev);
 }
 
-static int EpollModify(int fd, void* data, uint32_t events) {
+static int EpollModify(int fd, connx::SessionId session_id, uint32_t events) {
     epoll_event ev;
     ev.events = events;
-    ev.data.ptr = data;
+    ev.data.u64 = static_cast<uint64_t>(session_id);
     return epoll_ctl(g_epoll_fd, EPOLL_CTL_MOD, fd, &ev);
 }
 
@@ -223,17 +180,14 @@ static int EpollEventError(int fd) {
     return err != 0 ? err : ECONNRESET;
 }
 
+#define CLOSE_SOCKET(fd)                                                                           \
+    if (fd != -1) {                                                                                \
+        ::close(fd);                                                                               \
+        fd = -1;                                                                                   \
+    }
+
 #define EPOLL_EVENT_ADDR(i) (&g_epoll_events[i])
 namespace connx {
-static void QueuePollCmd(PollCmdType type, ClientImpl* impl) {
-    if (impl == nullptr) return;
-    auto cmd = new PollCmd;
-    cmd->type = type;
-    cmd->impl = impl;
-    impl->Ref();
-    g_poll_cmdq.push(&cmd->node);
-    PollerNotify();
-}
 
 connx_error ClientImpl::Init() {
     connx_error r = EpollInit();
@@ -258,72 +212,43 @@ connx_error ClientImpl::Init() {
 
 void ClientImpl::ClearConnectDeadline(ClientImpl* impl) {
     if (impl->connect_deadline_ != 0) {
+        auto session_id = impl->session_id_.load(std::memory_order_acquire);
         impl->connect_deadline_ = 0;
-        g_connect_timeouts.Unregister(impl);
+        if (session_id != 0) {
+            g_connect_timeouts.Unregister(session_id);
+        }
     }
 }
 
 void ClientImpl::Shutdown() {
     g_epoll_running = false;
 
-    PollerNotify();
+    CLOSE_SOCKET(g_epoll_fd);
 
     if (g_epoll_thread) {
         pthread_join(g_epoll_thread, NULL);
         g_epoll_thread = 0;
     }
-    CLOSE_SOCKET(g_poll_ctl_fd);
-    CLOSE_SOCKET(g_epoll_fd);
 }
 
-void ClientImpl::ProcessPollCommands() {
-    for (;;) {
-        auto cmd = reinterpret_cast<PollCmd*>(g_poll_cmdq.pop());
-        if (cmd == nullptr) break;
-
-        ClientImpl* impl = cmd->impl;
-        switch (cmd->type) {
-        case PollCmdType::kEnableWrite:
-            if (!impl->shutdown_ && impl->fd_ >= 0 &&
-                impl->poll_registered_.load(std::memory_order_acquire)) {
-                EpollModify(impl->fd_, impl, EPOLLIN | EPOLLOUT | EPOLLET);
-            }
-            break;
-        case PollCmdType::kDisableWrite:
-            if (!impl->shutdown_ && impl->fd_ >= 0 &&
-                impl->poll_registered_.load(std::memory_order_acquire)) {
-                EpollModify(impl->fd_, impl, EPOLLIN | EPOLLET);
-            }
-            break;
-        case PollCmdType::kBeginClose:
-            if (impl->fd_ >= 0 && impl->poll_registered_.load(std::memory_order_acquire)) {
-                EpollDelete(impl->fd_, EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP);
-            }
-            impl->ReleasePollRef();
-            break;
-        }
-        impl->Unref();
-        delete cmd;
-    }
-}
 void* ClientImpl::PollingThread(void*) {
-    do {
+    while (g_epoll_running) {
 
         int count = EpollWait(MIN_TIME_SLICE);
 
         for (int i = 0; i < count; i++) {
             struct epoll_event* ev = EPOLL_EVENT_ADDR(i);
-            if (ev->data.ptr == nullptr) {
-                DrainPollerNotify();
-                ProcessPollCommands();
-                continue;
-            }
-            ClientImpl* connector = reinterpret_cast<ClientImpl*>(ev->data.ptr);
+            SessionId session_id = static_cast<SessionId>(ev->data.u64);
+            ClientImpl* connector = GetSessionRegistry().Acquire(session_id);
 
             if (!connector) continue;
-            connector->Ref();
 
             if (connector->shutdown_) {
+                connector->Unref();
+                continue;
+            }
+
+            if (connector->session_id_.load(std::memory_order_acquire) != session_id) {
                 connector->Unref();
                 continue;
             }
@@ -356,10 +281,8 @@ void* ClientImpl::PollingThread(void*) {
             }
             connector->Unref();
         }
-        ProcessPollCommands();
         g_connect_timeouts.CheckTimeouts();
-    } while (g_epoll_running);
-    ProcessPollCommands();
+    }
     return NULL;
 }
 
@@ -369,6 +292,7 @@ ClientImpl::ClientImpl()
     , state_(ConnState::kIdle)
     , is_connected_(false)
     , poll_registered_(false)
+    , session_id_(0)
     , fd_(-1)
     , next_package_size_(0)
     , last_send_time_(0)
@@ -400,8 +324,10 @@ void ClientImpl::Stop() {
     if (!shutdown_) {
         CONNX_LOG_DEBUG("client shutdown...");
         shutdown_ = true;
+        if (fd_ >= 0) {
+            EpollDelete(fd_, EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP);
+        }
         BeginCloseState(nullptr);
-        QueuePollCmd(PollCmdType::kBeginClose, this);
         cv_.notify_one();
 
         if (thd_.joinable()) {
@@ -418,7 +344,12 @@ void ClientImpl::Stop() {
         msg_count_.Store(0);
         recv_buffer_.ClearBuffer();
         send_buffer_.ClearBuffer();
+        ClientImpl* held = DetachSession();
+        ReleasePollRef();
         FinishClosedState();
+        if (held != nullptr) {
+            held->Unref();
+        }
     }
 }
 connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
@@ -452,9 +383,11 @@ connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
         }
     }
 
+    SessionId session_id = GetSessionRegistry().Register(this);
+    session_id_.store(session_id, std::memory_order_release);
     if (opt_.tcp.connect_timeout_ms > 0) {
         connect_deadline_ = GetCurrentMillisec() + opt_.tcp.connect_timeout_ms;
-        g_connect_timeouts.Register(this); // beforce connect
+        g_connect_timeouts.Register(session_id); // beforce connect
     }
 
     int err = 0;
@@ -465,9 +398,14 @@ connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
     if (err < 0 && errno != EWOULDBLOCK && errno != EINPROGRESS) {
         if (opt_.tcp.connect_timeout_ms > 0) {
             connect_deadline_ = 0;
-            g_connect_timeouts.Unregister(this);
+            g_connect_timeouts.Unregister(session_id);
         }
         ret = CONNX_SYSTEM_ERROR(errno, "connect");
+        session_id_.store(0, std::memory_order_release);
+        ClientImpl* held = GetSessionRegistry().Unregister(session_id);
+        if (held != nullptr) {
+            held->Unref();
+        }
         CLOSE_SOCKET(sock_fd);
         FinishClosedState();
         return ret;
@@ -475,10 +413,15 @@ connx_error ClientImpl::ConnectImpl(const connx_resolved_address* addr) {
     Ref();
     fd_ = sock_fd; // beforce poll_registered_
     poll_registered_.store(true, std::memory_order_release);
-    if (EpollAdd(sock_fd, this, EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP) != 0) {
+    if (EpollAdd(sock_fd, session_id, EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP) != 0) {
         ret = CONNX_SYSTEM_ERROR(errno, "epoll_ctl");
         fd_ = -1;
         poll_registered_.store(false, std::memory_order_release);
+        session_id_.store(0, std::memory_order_release);
+        ClientImpl* held = GetSessionRegistry().Unregister(session_id);
+        if (held != nullptr) {
+            held->Unref();
+        }
         Unref();
         ::close(sock_fd);
         FinishClosedState();
@@ -494,7 +437,9 @@ bool ClientImpl::SendMsg(const Slice& msg) {
     }
     std::unique_lock<std::mutex> g(smtx_);
     send_buffer_.AddSlice(msg);
-    QueuePollCmd(PollCmdType::kEnableWrite, this);
+    if (fd_ >= 0) {
+        EpollModify(fd_, session_id_.load(std::memory_order_acquire), EPOLLIN | EPOLLOUT | EPOLLET);
+    }
     return true;
 }
 bool ClientImpl::SendMsg(Slice&& msg) {
@@ -503,15 +448,24 @@ bool ClientImpl::SendMsg(Slice&& msg) {
     }
     std::unique_lock<std::mutex> g(smtx_);
     send_buffer_.AddSlice(std::move(msg));
-    QueuePollCmd(PollCmdType::kEnableWrite, this);
+    if (fd_ >= 0) {
+        EpollModify(fd_, session_id_.load(std::memory_order_acquire), EPOLLIN | EPOLLOUT | EPOLLET);
+    }
     return true;
 }
 
 void ClientImpl::Disconnect() {
     bool was_connected = false;
     if (!BeginCloseState(&was_connected)) return;
-    QueuePollCmd(PollCmdType::kBeginClose, this);
+    ClientImpl* held = DetachSession();
+    if (fd_ >= 0) {
+        EpollDelete(fd_, EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP);
+    }
+    ReleasePollRef();
     FinishClosedState();
+    if (held != nullptr) {
+        held->Unref();
+    }
 }
 
 void ClientImpl::OnErrorEvent(int event_type, int err) {
@@ -519,7 +473,17 @@ void ClientImpl::OnErrorEvent(int event_type, int err) {
     if (!BeginCloseState(&was_connected)) {
         return;
     }
-    QueuePollCmd(PollCmdType::kBeginClose, this);
+    ClientImpl* held = DetachSession();
+    if (fd_ >= 0) {
+        EpollDelete(fd_, EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP);
+    }
+    if (!ReleasePollRef()) {
+        FinishClosedState();
+        if (held != nullptr) {
+            held->Unref();
+        }
+        return;
+    }
     FinishClosedState();
 
     auto obj = new ClientImpl::EventNode;
@@ -534,6 +498,9 @@ void ClientImpl::OnErrorEvent(int event_type, int err) {
         obj->ev = NetEvent::kConnectFailed;
     }
     PostEventNode(obj);
+    if (held != nullptr) {
+        held->Unref();
+    }
 }
 
 void ClientImpl::OnSendEvent() {
@@ -542,10 +509,11 @@ void ClientImpl::OnSendEvent() {
         OnErrorEvent(internal::kSendEvent, errno);
         return;
     }
+    SessionId session_id = session_id_.load(std::memory_order_acquire);
     if (send_buffer_.Empty()) {
-        QueuePollCmd(PollCmdType::kDisableWrite, this);
+        EpollModify(fd_, session_id, EPOLLIN | EPOLLET);
     } else {
-        QueuePollCmd(PollCmdType::kEnableWrite, this);
+        EpollModify(fd_, session_id, EPOLLIN | EPOLLOUT | EPOLLET);
     }
 }
 void ClientImpl::OnRecvEvent() {
@@ -554,10 +522,11 @@ void ClientImpl::OnRecvEvent() {
         return;
     }
     std::unique_lock<std::mutex> g(smtx_);
+    SessionId session_id = session_id_.load(std::memory_order_acquire);
     if (send_buffer_.Empty()) {
-        QueuePollCmd(PollCmdType::kDisableWrite, this);
+        EpollModify(fd_, session_id, EPOLLIN | EPOLLET);
     } else {
-        QueuePollCmd(PollCmdType::kEnableWrite, this);
+        EpollModify(fd_, session_id, EPOLLIN | EPOLLOUT | EPOLLET);
     }
 }
 

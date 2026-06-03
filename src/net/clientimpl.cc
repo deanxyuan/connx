@@ -10,6 +10,46 @@
 #include "src/utils/log.h"
 
 namespace connx {
+namespace {
+SessionRegistry g_session_registry;
+}
+
+SessionRegistry& GetSessionRegistry() { return g_session_registry; }
+
+SessionId SessionRegistry::Register(ClientImpl* impl) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    SessionId id = next_id_++;
+    if (id == 0) {
+        id = next_id_++;
+    }
+    impl->Ref();
+    sessions_[id] = impl;
+    return id;
+}
+
+ClientImpl* SessionRegistry::Acquire(SessionId session_id) {
+    if (session_id == 0) return nullptr;
+    std::lock_guard<std::mutex> lock(mtx_);
+    auto it = sessions_.find(session_id);
+    if (it == sessions_.end()) {
+        return nullptr;
+    }
+    it->second->Ref();
+    return it->second;
+}
+
+ClientImpl* SessionRegistry::Unregister(SessionId session_id) {
+    if (session_id == 0) return nullptr;
+    std::lock_guard<std::mutex> lock(mtx_);
+    auto it = sessions_.find(session_id);
+    if (it == sessions_.end()) {
+        return nullptr;
+    }
+    ClientImpl* impl = it->second;
+    sessions_.erase(it);
+    return impl;
+}
+
 void ClientImpl::SetOptions(const ClientOptions& opts) { opt_ = opts; }
 void ClientImpl::GetMetrics(Metrics* out_metrics) const {
     if (out_metrics == nullptr) return;
@@ -49,6 +89,7 @@ void ClientImpl::BeforeStartWorkThread() {
     last_recv_time_ = 0;
     msg_count_.Store(0);
     state_.store(ConnState::kIdle, std::memory_order_release);
+    session_id_.store(0, std::memory_order_release);
     is_connected_.store(false, std::memory_order_release);
     shutdown_ = false;
 
@@ -98,7 +139,6 @@ bool ClientImpl::TryStartConnect() {
 }
 
 bool ClientImpl::BeginCloseState(bool* was_connected) {
-    if (shutdown_) return false;
     ConnState previous = state_.exchange(ConnState::kClosing, std::memory_order_acq_rel);
     if (previous == ConnState::kIdle || previous == ConnState::kClosing) {
         return false;
@@ -107,8 +147,13 @@ bool ClientImpl::BeginCloseState(bool* was_connected) {
         *was_connected = (previous == ConnState::kConnected);
     }
     ClearConnectDeadline(this);
-    is_connected_.store(true, std::memory_order_release);
+    is_connected_.store(false, std::memory_order_release);
     return true;
+}
+
+ClientImpl* ClientImpl::DetachSession() {
+    SessionId session_id = session_id_.exchange(0, std::memory_order_acq_rel);
+    return GetSessionRegistry().Unregister(session_id);
 }
 
 void ClientImpl::FinishClosedState() {
