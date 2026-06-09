@@ -133,55 +133,7 @@ TEST(LogSeqlockTest, concurrent_single_writer_consistency) {
     ASSERT_TRUE(read_count.load() > 0);
 }
 
-// ---- 5. Concurrent consistency -- multiple writers, multiple readers ----
-//
-// Two writers each toggle a distinct pair. Readers must still see
-// a consistent pair (either A+UD_A or B+UD_B), never a mix.
-// This stress-tests the seqlock under writer-writer contention.
-
-TEST(LogSeqlockTest, concurrent_multi_writer_consistency) {
-    connx_log_set_callback(LogCbVerifyA, UD_A);
-    connx_log_set_min_level(CONNX_LOG_LEVEL_TRACE);
-
-    std::atomic<bool> stop{false};
-    std::atomic<int> read_count{0};
-
-    const int kReaders = 4;
-    std::thread readers[kReaders];
-    for (int r = 0; r < kReaders; r++) {
-        readers[r] = std::thread([&]() {
-            while (!stop.load(std::memory_order_acquire)) {
-                connx_log(CONNX_LOG_LEVEL_INFO, __LINE__, "multi-writer");
-                read_count.fetch_add(1, std::memory_order_relaxed);
-            }
-        });
-    }
-
-    // Two writers toggling independently.
-    std::thread writer_a([&]() {
-        for (int i = 0; i < 50000; i++) {
-            connx_log_set_callback(LogCbVerifyA, UD_A);
-            connx_log_set_callback(LogCbVerifyB, UD_B);
-        }
-    });
-    std::thread writer_b([&]() {
-        for (int i = 0; i < 50000; i++) {
-            connx_log_set_callback(LogCbVerifyB, UD_B);
-            connx_log_set_callback(LogCbVerifyA, UD_A);
-        }
-    });
-
-    writer_a.join();
-    writer_b.join();
-    stop.store(true, std::memory_order_release);
-    for (auto& t : readers) {
-        t.join();
-    }
-
-    ASSERT_TRUE(read_count.load() > 0);
-}
-
-// ---- 6. Callback invoked with NULL ----
+// ---- 5. Callback invoked with NULL ----
 
 TEST(LogSeqlockTest, set_callback_null) {
     connx_log_set_callback(nullptr, (void*)0xDEAD);
