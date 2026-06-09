@@ -142,8 +142,8 @@ private:
     int fd_;
 #endif
     size_t next_package_size_;
-    int64_t last_send_time_;
-    int64_t last_recv_time_;
+    std::atomic<int64_t> last_send_time_;
+    std::atomic<int64_t> last_recv_time_;
     int64_t connect_deadline_; // 0 = no timeout or not connecting
     std::atomic<uint64_t> number_of_bytes_sent_;
     std::atomic<uint64_t> number_of_bytes_received_;

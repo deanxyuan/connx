@@ -289,7 +289,7 @@ void* ClientImpl::PollingThread(void*) {
                     continue;
                 }
                 connector->last_recv_time_ = GetCurrentMillisec();
-                connector->last_send_time_ = connector->last_recv_time_;
+                connector->last_send_time_ = connector->last_recv_time_.load(std::memory_order_relaxed);
                 connector->OnConnected();
             }
 
@@ -546,7 +546,7 @@ void ClientImpl::OnSendEvent() {
     if (send_buffer_.Empty()) {
         KqueueDisableWrite(fd_, session_id);
     } else {
-        KqueueEnableWrite(fd_, session_id_);
+        KqueueEnableWrite(fd_, session_id);
     }
 }
 
@@ -560,7 +560,7 @@ void ClientImpl::OnRecvEvent() {
     if (send_buffer_.Empty()) {
         KqueueDisableWrite(fd_, session_id);
     } else {
-        KqueueEnableWrite(fd_, session_id_);
+        KqueueEnableWrite(fd_, session_id);
     }
 }
 
@@ -592,7 +592,7 @@ int ClientImpl::SendImpl() {
     size_t count = 0;
     do {
         Slice slice = send_buffer_.Front();
-        int slen = ::send(fd_, slice.begin(), slice.size(), 0);
+        int64_t slen = ::send(fd_, slice.begin(), slice.size(), 0);
         if (slen == 0) {
             break;
         }

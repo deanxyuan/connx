@@ -52,6 +52,27 @@ TEST(SliceTest, copy_assignment) {
     ASSERT_EQ(b.size(), (size_t)5);
     ASSERT_TRUE(b == "hello");
 }
+TEST(SliceTest, copy_assignment_shared_refcount) {
+    // Use a long string to force refcounted (non-inlined) allocation.
+    std::string long_str(100, 'x');
+    Slice a(long_str.data(), long_str.size());
+    Slice b(a); // b and a share refcount = 2
+
+    Slice c;
+    c = b; // must AddRef, refcount = 3
+    ASSERT_EQ(c.size(), (size_t)100);
+    ASSERT_TRUE(c == long_str);
+
+    // Destroy b early: refcount 3->2, a and c still alive.
+    b = Slice();
+    ASSERT_EQ(a.size(), (size_t)100);
+    ASSERT_EQ(c.size(), (size_t)100);
+    ASSERT_TRUE(a == long_str);
+    ASSERT_TRUE(c == long_str);
+    // If copy assignment skipped AddRef, refcount would be 1 here,
+    // and destroying b would have freed the underlying memory,
+    // causing use-after-free on a and c above.
+}
 TEST(SliceTest, move) {
     Slice a("hello");
     Slice b(std::move(a));

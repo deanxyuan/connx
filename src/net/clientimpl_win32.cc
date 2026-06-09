@@ -265,7 +265,7 @@ DWORD ClientImpl::PollingThread(void*) {
                 connector->OnErrorEvent(internal::kRecvEvent, WSAGetLastError());
             } else {
                 connector->last_send_time_ = GetCurrentMillisec();
-                connector->last_recv_time_ = connector->last_send_time_;
+                connector->last_recv_time_ = connector->last_send_time_.load(std::memory_order_relaxed);
                 connector->OnConnected();
             }
             connector->Unref();

@@ -129,12 +129,22 @@ connx_error connx_blocking_resolve_address(const char* name, const char* default
 
     /* Success path: set addrs non-NULL, fill it in */
     *addresses = static_cast<connx_resolved_addresses*>(malloc(sizeof(connx_resolved_addresses)));
+    if (CONNX_UNLIKELY(!*addresses)) {
+        err = CONNX_ERROR_FROM_FORMAT("malloc failed for resolved_addresses");
+        goto done;
+    }
     (*addresses)->naddrs = 0;
     for (resp = result; resp != nullptr; resp = resp->ai_next) {
         (*addresses)->naddrs++;
     }
     (*addresses)->addrs = static_cast<connx_resolved_address*>(
         malloc(sizeof(connx_resolved_address) * (*addresses)->naddrs));
+    if (CONNX_UNLIKELY(!(*addresses)->addrs)) {
+        free(*addresses);
+        *addresses = nullptr;
+        err = CONNX_ERROR_FROM_FORMAT("malloc failed for resolved_address array");
+        goto done;
+    }
 
     i = 0;
     for (resp = result; resp != nullptr; resp = resp->ai_next) {

@@ -158,7 +158,7 @@ int StartEchoServer(int port) {
     SOCKET listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd == INVALID_SOCKET) {
 #ifdef _WIN32
-        fprintf(stderr, "echoserver: socket failed: %ld\n", WSAGetLastError());
+        fprintf(stderr, "echoserver: socket failed: %d\n", WSAGetLastError());
 #else
         perror("echoserver: socket");
 #endif
@@ -181,7 +181,7 @@ int StartEchoServer(int port) {
 
     if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
 #ifdef _WIN32
-        fprintf(stderr, "echoserver: bind failed: %ld\n", WSAGetLastError());
+        fprintf(stderr, "echoserver: bind failed: %d\n", WSAGetLastError());
 #else
         perror("echoserver: bind");
 #endif
@@ -191,7 +191,7 @@ int StartEchoServer(int port) {
 
     if (listen(listen_fd, 128) != 0) {
 #ifdef _WIN32
-        fprintf(stderr, "echoserver: listen failed: %ld\n", WSAGetLastError());
+        fprintf(stderr, "echoserver: listen failed: %d\n", WSAGetLastError());
 #else
         perror("echoserver: listen");
 #endif
@@ -204,7 +204,7 @@ int StartEchoServer(int port) {
         socklen_t addr_len = sizeof(addr);
         if (getsockname(listen_fd, (struct sockaddr*)&addr, &addr_len) != 0) {
 #ifdef _WIN32
-            fprintf(stderr, "echoserver: getsockname failed: %ld\n", WSAGetLastError());
+            fprintf(stderr, "echoserver: getsockname failed: %d\n", WSAGetLastError());
 #else
             perror("echoserver: getsockname");
 #endif

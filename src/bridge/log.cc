@@ -4,6 +4,7 @@
  */
 
 #include "connx/c.h"
+#include <inttypes.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -26,7 +27,7 @@
 
 extern "C" {
 // 2023-04-12 16:16:00.000 thread_id line Info Message
-#define CONNX_LOG_FORMAT "%s.%03ld %lu %d %s %s"
+#define CONNX_LOG_FORMAT "%s.%03" PRId64 " %lu %d %s %s"
 
 static const char* g_desc[] = {"Trace", "Debug", "Info", "Warn", "Error"};
 
@@ -63,6 +64,7 @@ static void connx_log_default(int level, int line, unsigned long threadid, const
     free(output_text);
 }
 
+static std::atomic<intptr_t> g_seq{0};
 static std::atomic<intptr_t> g_log_function((intptr_t)connx_log_default);
 static std::atomic<intptr_t> g_user_data((intptr_t)0);
 static std::atomic<int> g_min_level(CONNX_LOG_LEVEL_DEBUG);
@@ -88,8 +90,11 @@ void connx_log_set_min_level(int level) {
 int connx_log_get_min_level() { return g_min_level.load(std::memory_order_relaxed); }
 
 void connx_log_set_callback(connx_log_callback_t callback, void* user_data) {
+    intptr_t s = g_seq.load(std::memory_order_relaxed);
+    g_seq.store(s + 1, std::memory_order_release);  // odd = writing
     g_log_function.store((intptr_t)callback, std::memory_order_relaxed);
     g_user_data.store((intptr_t)user_data, std::memory_order_relaxed);
+    g_seq.store(s + 2, std::memory_order_release);  // even = write done
 }
 
 void connx_log(int level, int line, const char* format, ...) {
@@ -140,8 +145,18 @@ void connx_log(int level, int line, const char* format, ...) {
 #endif
 
     auto threadid = static_cast<unsigned long>(GetCurrentThreadId());
-    void* usr_data = (void*)g_user_data.load(std::memory_order_relaxed);
-    auto fn = (connx_log_callback_t)g_log_function.load(std::memory_order_relaxed);
+
+    // Seqlock read: retry if version changed or writer is in progress
+    intptr_t s0, s1;
+    connx_log_callback_t fn;
+    void* usr_data;
+    do {
+        s0 = g_seq.load(std::memory_order_acquire);
+        fn = (connx_log_callback_t)g_log_function.load(std::memory_order_relaxed);
+        usr_data = (void*)g_user_data.load(std::memory_order_relaxed);
+        s1 = g_seq.load(std::memory_order_acquire);
+    } while (s0 != s1 || s0 % 2 != 0);
+
     if (fn) {
         fn(level, line, threadid, message, usr_data);
     }

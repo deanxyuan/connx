@@ -7,6 +7,10 @@
 
 #include <algorithm>
 
+#ifdef _WIN32
+#    include <winsock2.h>
+#endif
+
 #include "src/utils/time.h"
 
 namespace connx {
@@ -60,7 +64,11 @@ void ConnectTimeoutList::CheckTimeouts() {
         count_.store(static_cast<int>(write), std::memory_order_release);
     }
     for (auto c : timed_out) {
+#ifdef _WIN32
+        c->OnErrorEvent(0, WSAETIMEDOUT);
+#else
         c->OnErrorEvent(0, ETIMEDOUT);
+#endif
         c->Unref();
     }
 }

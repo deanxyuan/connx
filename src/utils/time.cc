@@ -1,7 +1,6 @@
 #include "src/utils/time.h"
 #ifdef _WIN32
 #    include <windows.h>
-#    include <sys/timeb.h>
 #else
 #    include <time.h>
 #endif
@@ -21,7 +20,6 @@ connx_timespec connx_now(connx_clock_t type) {
     connx_timespec now_tv;
     LARGE_INTEGER timestamp;
     LONGLONG diff;
-    struct _timeb now_tb;
     double now_dbl;
     if (type == CONNX_CLOCK_MONOTONIC) {
         QueryPerformanceCounter(&timestamp);
@@ -30,9 +28,12 @@ connx_timespec connx_now(connx_clock_t type) {
         now_tv.tv_sec = (int64_t)now_dbl;
         now_tv.tv_nsec = (int64_t)((now_dbl - (double)now_tv.tv_sec) * 1e9);
     } else {
-        _ftime_s(&now_tb);
-        now_tv.tv_sec = (int64_t)now_tb.time;
-        now_tv.tv_nsec = (int64_t)now_tb.millitm * 1000000;
+        FILETIME ft;
+        GetSystemTimeAsFileTime(&ft);
+        int64_t t = ((int64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+        t -= 116444736000000000LL; // 1601->1970 epoch offset (100ns units)
+        now_tv.tv_sec = (int64_t)(t / 10000000);
+        now_tv.tv_nsec = (int64_t)((t % 10000000) * 100);
     }
     return now_tv;
 }

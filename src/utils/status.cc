@@ -38,6 +38,7 @@ Status::Status(Status&& other) noexcept
 }
 
 Status& Status::operator=(Status&& other) noexcept {
+    if (this == &other) return *this;
     err_code_ = other.err_code_;
     desc_ = std::move(other.desc_);
     other.err_code_ = 0;

@@ -42,6 +42,7 @@ void ConnxCondVarInit(connx_condvar_t* cv) {
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);
     pthread_cond_init(cv, &attr);
+    pthread_condattr_destroy(&attr);
 }
 
 int ConnxCondVarWait(connx_condvar_t* cv, connx_mutex_t* mutex, int64_t timeout_ms) {

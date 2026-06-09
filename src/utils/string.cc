@@ -4,6 +4,7 @@
  */
 
 #include "src/utils/string.h"
+#include "src/utils/useful.h"
 #ifdef _WIN32
 #    include <Windows.h>
 #    include <UserEnv.h>
@@ -28,6 +29,10 @@ void* connx_malloc(size_t size) {
 char* connx_strdup(const char* src) { return connx_strdup(src, strlen(src)); }
 
 char* connx_strdup(const char* src, size_t size) {
+    if (CONNX_UNLIKELY(size == SIZE_MAX)) {
+        fprintf(stderr, "connx_strdup: integer overflow (size == SIZE_MAX)\n");
+        abort();
+    }
     size_t len = size + 1;
     char* dst = static_cast<char*>(connx_malloc(len));
     memcpy(dst, src, size);

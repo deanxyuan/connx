@@ -5,8 +5,11 @@
 
 #include "src/utils/slice.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <algorithm>
 #include "src/utils/atomic.h"
+#include "src/utils/useful.h"
 namespace connx {
 class SliceRefCount final {
 public:
@@ -67,6 +70,10 @@ Slice::Slice(const char* ptr, size_t len) {
         */
 
         refs_ = (SliceRefCount*)malloc(sizeof(SliceRefCount) + len);
+        if (CONNX_UNLIKELY(!refs_)) {
+            fprintf(stderr, "Slice: malloc failed (len=%zu)\n", len);
+            abort();
+        }
         new (refs_) SliceRefCount;
         data_.refcounted.length = len;
         data_.refcounted.bytes = reinterpret_cast<char*>(refs_ + 1);
@@ -97,11 +104,13 @@ Slice::Slice(const Slice& oth) {
 
 Slice& Slice::operator=(const Slice& oth) {
     if (this != &oth) {
-        if (refs_) {
-            refs_->DecRef();
-        }
+        // AddRef before DecRef: when both point to the same refcounted
+        // object, DecRef first would free it before AddRef can use it.
         if (oth.refs_) {
             oth.refs_->AddRef();
+        }
+        if (refs_) {
+            refs_->DecRef();
         }
         refs_ = oth.refs_;
         data_ = oth.data_;
@@ -200,6 +209,10 @@ Slice MakeSliceByLength(size_t len) {
         s.data_.inlined.length = static_cast<uint8_t>(len);
     } else {
         s.refs_ = (SliceRefCount*)malloc(sizeof(SliceRefCount) + len);
+        if (CONNX_UNLIKELY(!s.refs_)) {
+            fprintf(stderr, "Slice: malloc failed (len=%zu)\n", len);
+            abort();
+        }
         new (s.refs_) SliceRefCount;
         s.data_.refcounted.length = len;
         s.data_.refcounted.bytes = reinterpret_cast<char*>(s.refs_ + 1);
