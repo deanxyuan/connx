@@ -339,6 +339,11 @@ ClientImpl::ClientImpl()
 }
 
 ClientImpl::~ClientImpl() {
+    shutdown_ = true;
+    cv_.notify_one();
+    if (thd_.joinable()) {
+        thd_.join();
+    }
     if (opt_.codec) delete opt_.codec;
     if (buffer_) delete[] buffer_;
 }
