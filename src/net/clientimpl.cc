@@ -5,9 +5,11 @@
 
 #include "src/net/clientimpl.h"
 #include <assert.h>
+#include <thread>
 #include "src/utils/time.h"
 #include "connx/codec.h"
 #include "src/utils/log.h"
+#include "src/utils/useful.h"
 
 namespace connx {
 namespace {
@@ -168,6 +170,7 @@ void ClientImpl::ParsingProtocol() {
     if (cache_size >= next_package_size_ && next_package_size_ > 0) {
         Slice package = recv_buffer_.GetHeader(next_package_size_);
         service_->OnMessage(package.data(), package.size());
+        if (CONNX_UNLIKELY(shutdown_)) return;
         recv_buffer_.MoveHeader(next_package_size_);
         cache_size -= next_package_size_;
         next_package_size_ = 0;
@@ -217,6 +220,7 @@ void ClientImpl::ParsingProtocol() {
             packet.RemoveTail(packet.size() - pack_len);
         }
         service_->OnMessage(packet.data(), packet.size());
+        if (CONNX_UNLIKELY(shutdown_)) return;
         recv_buffer_.MoveHeader(pack_len);
 
         cache_size = recv_buffer_.GetBufferLength();
@@ -234,10 +238,45 @@ void ClientImpl::WorkThread() {
         auto node = reinterpret_cast<ClientImpl::EventNode*>(mpscq_.pop());
         if (node != nullptr) {
             msg_count_.FetchSub(1, MemoryOrder::RELAXED);
+            Ref();
             OnDispatch(node);
+            bool should_exit = shutdown_.load(std::memory_order_acquire);
             delete node;
+            if (CONNX_UNLIKELY(should_exit)) {
+                ClearPendingEventsAndBuffers();
+            }
+            Unref();
+            if (CONNX_UNLIKELY(should_exit)) {
+                return;
+            }
         }
     }
+}
+
+bool ClientImpl::WakeAndJoinWorkThread() {
+    cv_.notify_one();
+    if (!thd_.joinable()) {
+        return true;
+    }
+    if (thd_.get_id() == std::this_thread::get_id()) {
+        thd_.detach();
+        return false;
+    }
+    thd_.join();
+    return true;
+}
+
+void ClientImpl::ClearPendingEventsAndBuffers() {
+    bool empty = true;
+    do {
+        auto node = reinterpret_cast<ClientImpl::EventNode*>(mpscq_.PopAndCheckEnd(&empty));
+        if (node != nullptr) {
+            delete node;
+        }
+    } while (!empty);
+    msg_count_.Store(0);
+    recv_buffer_.ClearBuffer();
+    send_buffer_.ClearBuffer();
 }
 
 void ClientImpl::OnDispatch(ClientImpl::EventNode* node) {

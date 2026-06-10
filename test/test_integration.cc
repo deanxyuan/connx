@@ -75,6 +75,43 @@ public:
     std::condition_variable cv_;
 };
 
+class ReleaseOnConnectedHandler : public connx::ClientHandler {
+private:
+    connx::Client** client_;
+
+public:
+    explicit ReleaseOnConnectedHandler(connx::Client** client)
+        : client_(client) {}
+
+    void OnConnected() override {
+        connx::Client* cli = *client_;
+        *client_ = nullptr;
+        connx::ReleaseClient(cli);
+    }
+    void OnConnectFailed(const char* d) override {}
+    void OnClosed() override {}
+    void OnMessage(const void*, size_t) override {}
+};
+class ReleaseOnMessageHandler : public connx::ClientHandler {
+private:
+    connx::Client** client_;
+
+public:
+    explicit ReleaseOnMessageHandler(connx::Client** client)
+        : client_(client) {}
+
+    void OnConnected() override {
+        const char* msg = "release-on-message\n";
+        (*client_)->SendBuffer(msg, strlen(msg));
+    }
+    void OnConnectFailed(const char* d) override {}
+    void OnClosed() override {}
+    void OnMessage(const void*, size_t) override {
+        connx::Client* cli = *client_;
+        *client_ = nullptr;
+        connx::ReleaseClient(cli);
+    }
+};
 } // namespace
 
 // ============================================================================
@@ -123,7 +160,7 @@ TEST(IntegrationTest, connect_timeout) {
     ASSERT_TRUE(cli != nullptr);
 
     // TEST-NET-1 (RFC 5737) - non-routable, will time out.
-    ASSERT_TRUE(cli->Connect("192.0.2.1:80"));
+    ASSERT_TRUE(cli->Connect("192.0.2.1:6580"));
 
     ASSERT_TRUE(handler.WaitForConnect(3000));
     ASSERT_TRUE(handler.connect_failed_);
@@ -236,4 +273,53 @@ TEST(IntegrationTest, peer_close_reports_single_close) {
     connx::ReleaseClient(cli);
 }
 
+// ============================================================================
+// 6. Releasing from a callback should not self-join or delete the active
+//    ClientImpl while its work thread is still dispatching
+// ============================================================================
+TEST(IntegrationTest, release_from_callback_does_not_crash) {
+    int port = test::StartEchoServer(0);
+    ASSERT_TRUE(port > 0);
+
+    connx::Client* cli = nullptr;
+    ReleaseOnConnectedHandler hander(&cli);
+    connx::ClientOptions opts;
+    opts.codec = new connx::DelimiterCodec('\n');
+
+    cli = connx::CreateClient(&hander, opts);
+    ASSERT_TRUE(cli != nullptr);
+
+    std::string addr = "127.0.0.1:" + std::to_string(port);
+    ASSERT_TRUE(cli->Connect(addr.c_str()));
+
+    for (int i = 0; i < 50 && cli != nullptr; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_TRUE(cli == nullptr);
+
+    test::StopEchoServer();
+}
+
+TEST(IntegrationTest, release_from_message_callback_does_not_crash) {
+    int port = test::StartEchoServer(0);
+    ASSERT_TRUE(port > 0);
+
+    connx::Client* cli = nullptr;
+    ReleaseOnMessageHandler hander(&cli);
+    connx::ClientOptions opts;
+    opts.codec = new connx::DelimiterCodec('\n');
+
+    cli = connx::CreateClient(&hander, opts);
+    ASSERT_TRUE(cli != nullptr);
+
+    std::string addr = "127.0.0.1:" + std::to_string(port);
+    ASSERT_TRUE(cli->Connect(addr.c_str()));
+
+    for (int i = 0; i < 50 && cli != nullptr; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_TRUE(cli == nullptr);
+
+    test::StopEchoServer();
+}
 RUN_ALL_TESTS()

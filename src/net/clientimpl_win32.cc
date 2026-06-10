@@ -308,10 +308,7 @@ ClientImpl::ClientImpl()
 
 ClientImpl::~ClientImpl() {
     shutdown_ = true;
-    cv_.notify_one();
-    if (thd_.joinable()) {
-        thd_.join();
-    }
+    WakeAndJoinWorkThread();
     if (opt_.codec) delete opt_.codec;
     if (buffer_) delete[] buffer_;
     if (conn_ole_) delete conn_ole_;
@@ -356,22 +353,10 @@ void ClientImpl::Stop() {
             cve_.wait_for(lck, std::chrono::milliseconds(MIN_TIME_SLICE * 2),
                           [this]() -> bool { return pending_io_.Load() == 0; });
         }
-        cv_.notify_one();
-
-        if (thd_.joinable()) {
-            thd_.join();
+        bool joined = WakeAndJoinWorkThread();
+        if (joined) {
+            ClearPendingEventsAndBuffers();
         }
-
-        bool empty = true;
-        do {
-            auto node = reinterpret_cast<ClientImpl::EventNode*>(mpscq_.PopAndCheckEnd(&empty));
-            if (node != nullptr) {
-                delete node;
-            }
-        } while (!empty);
-        msg_count_.Store(0);
-        recv_buffer_.ClearBuffer();
-        send_buffer_.ClearBuffer();
         ClientImpl* held = DetachSession();
         ReleasePollRef();
         FinishClosedState();

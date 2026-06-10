@@ -121,6 +121,8 @@ private:
     void TransferData(const Slice& s);
     void ParsingProtocol();
     void WorkThread();
+    bool WakeAndJoinWorkThread();
+    void ClearPendingEventsAndBuffers();
     inline void PostEventNode(ClientImpl::EventNode* node) {
         mpscq_.push(&node->_);
         msg_count_.FetchAdd(1, MemoryOrder::RELAXED);
