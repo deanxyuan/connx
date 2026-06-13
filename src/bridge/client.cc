@@ -70,4 +70,14 @@ Client* CreateClient(ClientHandler* handler, const ClientOptions& opts) {
 void ReleaseClient(Client* cli) {
     if (cli) delete cli;
 }
+
+bool SetRuntimeWorkerThreads(size_t worker_threads) {
+    return ClientImpl::SetRuntimeWorkerThreads(worker_threads);
+}
+
+size_t GetRuntimeWorkerThreads() { return ClientImpl::GetRuntimeWorkerThreads(); }
+
+bool SetRuntimeWorkerThreadsAuto() { return ClientImpl::SetRuntimeWorkerThreadsAuto(); }
+
+bool IsRuntimeWorkerThreadsAuto() { return ClientImpl::IsRuntimeWorkerThreadsAuto(); }
 } // namespace connx

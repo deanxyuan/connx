@@ -358,6 +358,41 @@ CONNX_API void connx_library_init();
  */
 CONNX_API void connx_library_shutdown();
 
+/**
+ * @brief Configures the global runtime worker thread count
+ *
+ * Must be called before connx_library_init() or before creating the first client.
+ * Pass 0 to restore the built-in default. The default is 2 worker threads.
+ *
+ * @return 0 on success, -1 if the runtime has already started.
+ */
+CONNX_API int connx_runtime_set_worker_threads(size_t worker_threads);
+
+/**
+ * @brief Returns the configured global runtime worker thread count.
+ *
+ * Returns 0 when automatic mode is enabled.
+ *
+ * @return The configured worker thread count, or 0 if automatic.
+ */
+CONNX_API size_t connx_runtime_get_worker_threads(void);
+
+/**
+ * @brief Enables automatic global runtime worker thread count selection.
+ *
+ * Must be called before connx_library_init() or before creating the first client.
+ *
+ * @return 0 on success, -1 if the runtime has already started.
+ */
+CONNX_API int connx_runtime_set_worker_threads_auto(void);
+
+/**
+ * @brief Returns non-zero if automatic worker thread count selection is enabled.
+ *
+ * @return Non-zero if automatic, 0 otherwise.
+ */
+CONNX_API int connx_runtime_is_worker_threads_auto(void);
+
 // ============================================================================
 // Version
 // ============================================================================

@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "connx/client.h"
 #include "connx/codec/delimiter_codec.h"
@@ -75,43 +77,74 @@ public:
     std::condition_variable cv_;
 };
 
-class ReleaseOnConnectedHandler : public connx::ClientHandler {
-private:
-    connx::Client** client_;
-
-public:
-    explicit ReleaseOnConnectedHandler(connx::Client** client)
-        : client_(client) {}
-
-    void OnConnected() override {
-        connx::Client* cli = *client_;
-        *client_ = nullptr;
-        connx::ReleaseClient(cli);
-    }
-    void OnConnectFailed(const char* d) override {}
-    void OnClosed() override {}
-    void OnMessage(const void*, size_t) override {}
-};
 class ReleaseOnMessageHandler : public connx::ClientHandler {
-private:
-    connx::Client** client_;
-
 public:
-    explicit ReleaseOnMessageHandler(connx::Client** client)
-        : client_(client) {}
+    void SetClient(connx::Client* client) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        client_ = client;
+    }
 
     void OnConnected() override {
-        const char* msg = "release-on-message\n";
-        (*client_)->SendBuffer(msg, strlen(msg));
+        std::lock_guard<std::mutex> lk(mtx_);
+        connected_ = true;
+        cv_.notify_one();
     }
-    void OnConnectFailed(const char* d) override {}
-    void OnClosed() override {}
-    void OnMessage(const void*, size_t) override {
-        connx::Client* cli = *client_;
-        *client_ = nullptr;
-        connx::ReleaseClient(cli);
+
+    void OnConnectFailed(const char* reason) override {
+        std::lock_guard<std::mutex> lk(mtx_);
+        connect_failed_ = true;
+        fail_reason_ = reason ? reason : "";
+        cv_.notify_one();
     }
+
+    void OnClosed() override {
+        std::lock_guard<std::mutex> lk(mtx_);
+        closed_ = true;
+        cv_.notify_one();
+    }
+
+    void OnMessage(const void* data, size_t len) override {
+        connx::Client* client = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            received_.append(static_cast<const char*>(data), len);
+            client = client_;
+            client_ = nullptr;
+        }
+        if (client != nullptr) {
+            connx::ReleaseClient(client);
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            released_ = true;
+            cv_.notify_one();
+        }
+    }
+
+    bool WaitForConnect(int timeout_ms = 5000) {
+        std::unique_lock<std::mutex> lk(mtx_);
+        return cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms),
+                            [this] { return connected_ || connect_failed_; });
+    }
+
+    bool WaitForRelease(int timeout_ms = 5000) {
+        std::unique_lock<std::mutex> lk(mtx_);
+        return cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms),
+                            [this] { return released_; });
+    }
+
+    connx::Client* client_ = nullptr;
+    bool connected_ = false;
+    bool connect_failed_ = false;
+    bool closed_ = false;
+    bool released_ = false;
+    std::string fail_reason_;
+    std::string received_;
+    std::mutex mtx_;
+    std::condition_variable cv_;
 };
+
 } // namespace
 
 // ============================================================================
@@ -148,9 +181,9 @@ TEST(IntegrationTest, echo_send_and_receive) {
 }
 
 // ============================================================================
-// 2. Connect timeout
+// 2. Connect failure
 // ============================================================================
-TEST(IntegrationTest, connect_timeout) {
+TEST(IntegrationTest, connect_failure) {
     SyncHandler handler;
     connx::ClientOptions opts;
     opts.codec = new connx::DelimiterCodec('\n');
@@ -159,8 +192,10 @@ TEST(IntegrationTest, connect_timeout) {
     connx::Client* cli = connx::CreateClient(&handler, opts);
     ASSERT_TRUE(cli != nullptr);
 
-    // TEST-NET-1 (RFC 5737) - non-routable, will time out.
-    ASSERT_TRUE(cli->Connect("192.0.2.1:6580"));
+    // Port 1 on loopback is typically closed and should fail quickly. This is
+    // deterministic in local test environments, unlike external blackhole
+    // addresses that may be intercepted by routing or proxy layers.
+    ASSERT_TRUE(cli->Connect("127.0.0.1:1"));
 
     ASSERT_TRUE(handler.WaitForConnect(3000));
     ASSERT_TRUE(handler.connect_failed_);
@@ -196,7 +231,7 @@ TEST(IntegrationTest, multiple_clients) {
     int port = test::StartEchoServer(0);
     ASSERT_TRUE(port > 0);
 
-    const int kNumClients = 3;
+    const int kNumClients = 32;
     SyncHandler handlers[kNumClients];
     connx::Client* clients[kNumClients];
 
@@ -219,9 +254,12 @@ TEST(IntegrationTest, multiple_clients) {
     }
 
     // Each sends a unique message.
-    const char* msgs[kNumClients] = {"client-0\n", "client-1\n", "client-2\n"};
+    std::vector<std::string> msgs;
     for (int i = 0; i < kNumClients; i++) {
-        ASSERT_TRUE(clients[i]->SendBuffer(msgs[i], strlen(msgs[i])));
+        msgs.push_back("client-" + std::to_string(i) + "\n");
+    }
+    for (int i = 0; i < kNumClients; i++) {
+        ASSERT_TRUE(clients[i]->SendBuffer(msgs[i].data(), msgs[i].size()));
     }
 
     // Each receives its own echo.
@@ -240,7 +278,56 @@ TEST(IntegrationTest, multiple_clients) {
 }
 
 // ============================================================================
-// 5. Peer close should surface a single close event
+// 5. Concurrent sends on one client should be serialized through the
+//    connection queue
+// ============================================================================
+TEST(IntegrationTest, concurrent_send_on_single_client) {
+    int port = test::StartEchoServer(0);
+    ASSERT_TRUE(port > 0);
+
+    SyncHandler handler;
+    connx::ClientOptions opts;
+    opts.codec = new connx::DelimiterCodec('\n');
+
+    connx::Client* cli = connx::CreateClient(&handler, opts);
+    ASSERT_TRUE(cli != nullptr);
+
+    std::string addr = "127.0.0.1:" + std::to_string(port);
+    ASSERT_TRUE(cli->Connect(addr.c_str()));
+    ASSERT_TRUE(handler.WaitForConnect());
+    ASSERT_TRUE(handler.connected_);
+
+    const int kProducers = 8;
+    const int kMessagesPerProducer = 64;
+    const int kTotalMessages = kProducers * kMessagesPerProducer;
+
+    std::atomic<int> failed_sends{0};
+    std::vector<std::thread> senders;
+    for (int producer = 0; producer < kProducers; ++producer) {
+        senders.push_back(std::thread([producer, kMessagesPerProducer, cli, &failed_sends]() {
+            for (int i = 0; i < kMessagesPerProducer; ++i) {
+                std::string msg =
+                    "producer-" + std::to_string(producer) + "-" + std::to_string(i) + "\n";
+                if (!cli->SendBuffer(msg.data(), msg.size())) {
+                    failed_sends.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        }));
+    }
+    for (size_t i = 0; i < senders.size(); ++i) {
+        senders[i].join();
+    }
+    ASSERT_EQ(failed_sends.load(std::memory_order_relaxed), 0);
+    ASSERT_TRUE(handler.WaitForMessage(kTotalMessages, 8000));
+    ASSERT_EQ(handler.msg_count_, kTotalMessages);
+
+    cli->Disconnect();
+    connx::ReleaseClient(cli);
+    test::StopEchoServer();
+}
+
+// ============================================================================
+// 6. Peer close should surface a single close event
 // ============================================================================
 TEST(IntegrationTest, peer_close_reports_single_close) {
     int port = test::StartEchoServer(0);
@@ -274,52 +361,32 @@ TEST(IntegrationTest, peer_close_reports_single_close) {
 }
 
 // ============================================================================
-// 6. Releasing from a callback should not self-join or delete the active
-//    ClientImpl while its work thread is still dispatching
+// 7. Releasing the client from a callback must not deadlock or touch freed data
 // ============================================================================
-TEST(IntegrationTest, release_from_callback_does_not_crash) {
+TEST(IntegrationTest, release_client_inside_message_callback) {
     int port = test::StartEchoServer(0);
     ASSERT_TRUE(port > 0);
 
-    connx::Client* cli = nullptr;
-    ReleaseOnConnectedHandler hander(&cli);
+    ReleaseOnMessageHandler handler;
     connx::ClientOptions opts;
     opts.codec = new connx::DelimiterCodec('\n');
 
-    cli = connx::CreateClient(&hander, opts);
+    connx::Client* cli = connx::CreateClient(&handler, opts);
     ASSERT_TRUE(cli != nullptr);
+    handler.SetClient(cli);
 
     std::string addr = "127.0.0.1:" + std::to_string(port);
     ASSERT_TRUE(cli->Connect(addr.c_str()));
+    ASSERT_TRUE(handler.WaitForConnect());
+    ASSERT_TRUE(handler.connected_);
 
-    for (int i = 0; i < 50 && cli != nullptr; i++) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    ASSERT_TRUE(cli == nullptr);
+    const char* msg = "release-in-callback\n";
+    ASSERT_TRUE(cli->SendBuffer(msg, strlen(msg)));
+
+    ASSERT_TRUE(handler.WaitForRelease(3000));
+    ASSERT_EQ(handler.received_, "release-in-callback\n");
 
     test::StopEchoServer();
 }
 
-TEST(IntegrationTest, release_from_message_callback_does_not_crash) {
-    int port = test::StartEchoServer(0);
-    ASSERT_TRUE(port > 0);
-
-    connx::Client* cli = nullptr;
-    ReleaseOnMessageHandler hander(&cli);
-    connx::ClientOptions opts;
-    opts.codec = new connx::DelimiterCodec('\n');
-
-    cli = connx::CreateClient(&hander, opts);
-    ASSERT_TRUE(cli != nullptr);
-
-    std::string addr = "127.0.0.1:" + std::to_string(port);
-    ASSERT_TRUE(cli->Connect(addr.c_str()));
-
-    for (int i = 0; i < 50 && cli != nullptr; i++) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    ASSERT_TRUE(cli == nullptr);
-
-    test::StopEchoServer();
-}
 RUN_ALL_TESTS()

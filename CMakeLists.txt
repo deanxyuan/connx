@@ -42,16 +42,19 @@ aux_source_directory(${PROJECT_SOURCE_DIR}/src/net NET_SOURCE)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/utils UTILS_SOURCE)
 if(WIN32)
     list(REMOVE_ITEM NET_SOURCE 
-        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_linux.cc
-        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_macos.cc)
+        ${PROJECT_SOURCE_DIR}/src/net/client_connection_posix.cc
+        ${PROJECT_SOURCE_DIR}/src/net/poller_linux.cc
+        ${PROJECT_SOURCE_DIR}/src/net/poller_kqueue.cc)
 elseif(APPLE)
     list(REMOVE_ITEM NET_SOURCE 
-        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_linux.cc
-        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_win32.cc)
+        ${PROJECT_SOURCE_DIR}/src/net/client_connection_win32.cc
+        ${PROJECT_SOURCE_DIR}/src/net/poller_linux.cc
+        ${PROJECT_SOURCE_DIR}/src/net/poller_win32.cc)
 else()
     list(REMOVE_ITEM NET_SOURCE 
-        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_win32.cc
-        ${PROJECT_SOURCE_DIR}/src/net/clientimpl_macos.cc)
+        ${PROJECT_SOURCE_DIR}/src/net/client_connection_win32.cc
+        ${PROJECT_SOURCE_DIR}/src/net/poller_kqueue.cc
+        ${PROJECT_SOURCE_DIR}/src/net/poller_win32.cc)
 endif()
 
 # ============================================================================

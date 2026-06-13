@@ -50,8 +50,11 @@ echo generator: !generator!
 echo arch: %arch%
 echo build_type: %build_type%
 echo version: %version%
+
+:: Get project source directory (remove trailing backslash if present)
 set "project_source_dir=%~dp0"
-set "current_build_path=%project_source_dir%%dir_name%"
+if "!project_source_dir:~-1!"=="\" set "project_source_dir=!project_source_dir:~0,-1!"
+set "current_build_path=!project_source_dir!\%dir_name%"
 
 :: Clean
 if %cleanup% equ 1 (
@@ -84,31 +87,56 @@ cmake --build . --config %build_type% --parallel %num_of_jobs% || (
 
 :: Package
 if defined version (
-    mkdir "%current_build_path%\lib" 2>nul
-    mkdir "%current_build_path%\include" 2>nul
-    xcopy /E /I /Y /Q "%project_source_dir%include\connx" "%current_build_path%\include\connx"
-    copy /Y "%current_build_path%\%build_type%\connx.dll" "%current_build_path%\lib\" >nul 2>nul
-    copy /Y "%current_build_path%\%build_type%\connx.lib" "%current_build_path%\lib\" >nul 2>nul
+    :: Change to build directory first
+    cd /d "!current_build_path!"
 
-    cd /d "%current_build_path%"
-    set "package_name=connx_win_v%version%_%arch%.tar.gz"
-    tar -zcf "!package_name!" include lib
+    :: Create directories
+    if not exist "lib" mkdir "lib"
+    if not exist "include" mkdir "include"
+    if not exist "include\connx" mkdir "include\connx"
+
+    :: Copy headers
+    set "src_include=!project_source_dir!\include\connx"
+    if exist "!src_include!\" (
+        xcopy /E /I /Y /Q "!src_include!" "include\connx" >nul 2>nul
+    )
+
+    :: Copy libraries
+    set "src_bin=!build_type!"
+    if exist "!src_bin!\connx.dll" copy /Y "!src_bin!\connx.dll" "lib\" >nul 2>nul
+    if exist "!src_bin!\connx.lib" copy /Y "!src_bin!\connx.lib" "lib\" >nul 2>nul
+    if exist "!src_bin!\connx.pdb" copy /Y "!src_bin!\connx.pdb" "lib\" >nul 2>nul
+
+    :: Create package
+    cd /d "!current_build_path!"
+    set "package_name=connx_win_v!version!_!arch!.tar.gz"
+
+    :: Check if include and lib directories have content
+    set "has_content=0"
+    dir /b "include\connx\*.h" >nul 2>nul && set "has_content=1"
+    dir /b "lib\*.dll" >nul 2>nul && set "has_content=1"
+    dir /b "lib\*.lib" >nul 2>nul && set "has_content=1"
+
+    if "!has_content!"=="1" (
+        tar -zcf "!package_name!" include lib
+    ) else (
+        echo WARNING: No content to package
+    )
 
     :: Determine output directory
-    if not defined output_dir set "output_dir=output"
-    if not "!output_dir:~0,1!"==":" (
-        if not "!output_dir:~0,2!"=="\\" (
-            set "output_dir=%project_source_dir%!output_dir!"
-        )
-    )
+    if not defined output_dir set "output_dir=!project_source_dir!\output"
     if not exist "!output_dir!\" mkdir "!output_dir!\"
-    copy /Y "!package_name!" "!output_dir!\" >nul
-    echo packed: !output_dir!\!package_name!
+    if exist "!package_name!" (
+        copy /Y "!package_name!" "!output_dir!\" >nul
+        echo packed: !output_dir!\!package_name!
+    ) else (
+        echo ERROR: Package creation failed
+    )
 
     :: Cleanup temporary files in build directory
-    del /q "!package_name!"
-    rd /s /q "%current_build_path%\include"
-    rd /s /q "%current_build_path%\lib"
+    if exist "!package_name!" del /q "!package_name!"
+    if exist "!current_build_path!\include" rd /s /q "!current_build_path!\include"
+    if exist "!current_build_path!\lib" rd /s /q "!current_build_path!\lib"
     echo ----- finish ----
 )
 

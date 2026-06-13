@@ -41,7 +41,11 @@ void LibraryInit() {
 }
 
 void LibraryShutdown() {
+    ConnxOnceInit(&g_basic_init, do_basic_init);
     MutexLock lock(&g_init_mtx);
+    if (g_initializations <= 0) {
+        return;
+    }
     if (--g_initializations == 0) {
         ClientImpl::Shutdown();
 #ifdef _WIN32

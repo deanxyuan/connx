@@ -4,7 +4,6 @@
  */
 
 #include "connx/c.h"
-#include <inttypes.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -27,7 +26,7 @@
 
 extern "C" {
 // 2023-04-12 16:16:00.000 thread_id line Info Message
-#define CONNX_LOG_FORMAT "%s.%03" PRId64 " %lu %d %s %s"
+#define CONNX_LOG_FORMAT "%s.%03d %lu %d %s %s"
 
 static const char* g_desc[] = {"Trace", "Debug", "Info", "Warn", "Error"};
 
@@ -56,9 +55,9 @@ static void connx_log_default(int level, int line, unsigned long threadid, const
     }
 
     char* output_text = NULL;
-    connx_format(&output_text, CONNX_LOG_FORMAT, time_buffer,
-                 now.tv_nsec / 1000000, // milliseconds
-                 threadid, line, g_desc[static_cast<int>(level)], message);
+    int millis = static_cast<int>(now.tv_nsec / 1000000);
+    connx_format(&output_text, CONNX_LOG_FORMAT, time_buffer, millis, threadid, line,
+                 g_desc[static_cast<int>(level)], message);
 
     fprintf(stderr, "%s\n", output_text);
     free(output_text);
@@ -69,14 +68,14 @@ static std::atomic<intptr_t> g_log_function((intptr_t)connx_log_default);
 static std::atomic<intptr_t> g_user_data((intptr_t)0);
 static std::atomic<int> g_min_level(CONNX_LOG_LEVEL_DEBUG);
 
-#ifndef _WIN32
-#    ifdef __APPLE__
-static unsigned long GetCurrentThreadId() {
+#ifdef _WIN32
+static unsigned long GetLogThreadId() { return static_cast<unsigned long>(::GetCurrentThreadId()); }
+#elif defined(__APPLE__)
+static unsigned long GetLogThreadId() {
     return static_cast<unsigned long>(pthread_mach_thread_np(pthread_self()));
 }
-#    else
-static pid_t GetCurrentThreadId() { return syscall(SYS_gettid); }
-#    endif
+#else
+static pid_t GetLogThreadId() { return syscall(SYS_gettid); }
 #endif
 
 void connx_log_set_min_level(int level) {
@@ -144,19 +143,9 @@ void connx_log(int level, int line, const char* format, ...) {
     }
 #endif
 
-    auto threadid = static_cast<unsigned long>(GetCurrentThreadId());
-
-    // Seqlock read: retry if version changed or writer is in progress
-    intptr_t s0, s1;
-    connx_log_callback_t fn;
-    void* usr_data;
-    do {
-        s0 = g_seq.load(std::memory_order_acquire);
-        fn = (connx_log_callback_t)g_log_function.load(std::memory_order_relaxed);
-        usr_data = (void*)g_user_data.load(std::memory_order_relaxed);
-        s1 = g_seq.load(std::memory_order_acquire);
-    } while (s0 != s1 || s0 % 2 != 0);
-
+    auto threadid = static_cast<unsigned long>(GetLogThreadId());
+    void* usr_data = (void*)g_user_data.load(std::memory_order_relaxed);
+    auto fn = (connx_log_callback_t)g_log_function.load(std::memory_order_relaxed);
     if (fn) {
         fn(level, line, threadid, message, usr_data);
     }

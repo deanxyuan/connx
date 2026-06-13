@@ -11,6 +11,7 @@
 #include <connx/client.h>
 #include <connx/codec/delimiter_codec.h>
 #include <connx/options.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,8 +67,7 @@ public:
 
         connx::Metrics m;
         client_->GetMetrics(&m);
-        printf("[metrics] sent=%llu recv=%llu\n", (unsigned long long)m.bytes_sent,
-               (unsigned long long)m.bytes_received);
+        printf("[metrics] sent=%" PRIu64 " recv=%" PRIu64 "\n", m.bytes_sent, m.bytes_received);
         connx::ReleaseClient(client_); // deletes codec via ~ClientImpl
     }
 

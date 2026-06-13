@@ -280,6 +280,17 @@ void connx_client_get_metrics(const connx_client_t* client, connx_metrics_t* met
 // ============================================================================
 void connx_library_init() { connx::LibraryInit(); }
 void connx_library_shutdown() { connx::LibraryShutdown(); }
+int connx_runtime_set_worker_threads(size_t worker_threads) {
+    return connx::SetRuntimeWorkerThreads(worker_threads) ? 0 : -1;
+}
+size_t connx_runtime_get_worker_threads(void) { return connx::GetRuntimeWorkerThreads(); }
+int connx_runtime_set_worker_threads_auto(void) {
+    return connx::SetRuntimeWorkerThreadsAuto() ? 0 : -1;
+}
+int connx_runtime_is_worker_threads_auto(void) {
+    return connx::IsRuntimeWorkerThreadsAuto() ? 1 : 0;
+}
+
 // ============================================================================
 // Version
 // ============================================================================

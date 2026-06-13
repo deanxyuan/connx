@@ -110,6 +110,37 @@ TEST(CApiTest, options_setters_null_safe) {
     connx_client_options_destroy(nullptr);
 }
 
+// RUNTIME CONFIGURATION
+
+TEST(CApiTest, runtime_worker_threads_modes) {
+    ASSERT_EQ(connx_runtime_set_worker_threads(0), 0);
+    ASSERT_EQ(connx_runtime_get_worker_threads(), (size_t)2);
+    ASSERT_EQ(connx_runtime_is_worker_threads_auto(), 0);
+
+    ASSERT_EQ(connx_runtime_set_worker_threads(4), 0);
+    ASSERT_EQ(connx_runtime_get_worker_threads(), (size_t)4);
+    ASSERT_EQ(connx_runtime_is_worker_threads_auto(), 0);
+
+    ASSERT_EQ(connx_runtime_set_worker_threads_auto(), 0);
+    ASSERT_EQ(connx_runtime_get_worker_threads(), (size_t)0);
+    ASSERT_EQ(connx_runtime_is_worker_threads_auto(), 1);
+
+    ASSERT_EQ(connx_runtime_set_worker_threads(0), 0);
+    ASSERT_EQ(connx_runtime_get_worker_threads(), (size_t)2);
+    ASSERT_EQ(connx_runtime_is_worker_threads_auto(), 0);
+}
+
+TEST(CApiTest, runtime_worker_threads_rejects_after_init) {
+    ASSERT_EQ(connx_runtime_set_worker_threads(2), 0);
+    connx_library_init();
+
+    ASSERT_EQ(connx_runtime_set_worker_threads(3), -1);
+    ASSERT_EQ(connx_runtime_set_worker_threads_auto(), -1);
+
+    connx_library_shutdown();
+    ASSERT_EQ(connx_runtime_set_worker_threads(0), 0);
+}
+
 // CLIENT LIFECYCLE
 
 TEST(CApiTest, client_new_destroy) {
