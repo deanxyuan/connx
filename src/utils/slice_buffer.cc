@@ -5,7 +5,6 @@
 
 #include "src/utils/slice_buffer.h"
 #include <string.h>
-#include <iterator>
 #include "src/utils/useful.h"
 
 namespace connx {

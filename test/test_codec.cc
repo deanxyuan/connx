@@ -22,7 +22,7 @@ TEST(DelimiterCodecTest, basic_newline) {
     size_t consumed = 0;
     auto result = codec.Decode(data, strlen(data), &consumed);
     ASSERT_TRUE(result == DecodeResult::kSuccess);
-    ASSERT_EQ(consumed, (size_t)6); // "hello(n"
+    ASSERT_EQ(consumed, (size_t)6); // "hello\n"
 }
 TEST(DelimiterCodecTest, delimiter_at_end) {
     DelimiterCodec codec('\n');
@@ -75,10 +75,10 @@ TEST(DelimiterCodecTest, multiple_delimiters) {
     ASSERT_EQ(consumed, (size_t)6); // "line1\n"
     auto r2 = codec.Decode(data + consumed, strlen(data) - consumed, &consumed);
     ASSERT_TRUE(r2 == DecodeResult::kSuccess);
-    ASSERT_EQ(consumed, (size_t)6); // "line2(n"
+    ASSERT_EQ(consumed, (size_t)6); // "line2\n"
     auto r3 = codec.Decode(data + 12, strlen(data) - 12, &consumed);
     ASSERT_TRUE(r3 == DecodeResult::kSuccess);
-    ASSERT_EQ(consumed, (size_t)6); // "line3(n"
+    ASSERT_EQ(consumed, (size_t)6); // "line3\n"
 }
 
 // FixedLengthCodec Tests
@@ -157,7 +157,7 @@ TEST(LengthFieldCodecTest, need_more_body) {
     size_t consumed = 0;
     auto result = codec.Decode(frame, sizeof(frame), &consumed);
     ASSERT_TRUE(result == DecodeResult::kNeedMoreData);
-    ASSERT_EQ(consumed, (size_t)14); // expectedtotal: 4 + 10
+    ASSERT_EQ(consumed, (size_t)14); // expected total: 4 + 10
 }
 TEST(LengthFieldCodecTest, two_byte_length_field) {
     // header_len=4,lengthfield at offset=0,2 bytes long
@@ -189,12 +189,12 @@ TEST(LengthFieldCodecTest, offset_length_field) {
     size_t consumed = 0;
     auto result = codec.Decode(frame, sizeof(frame), &consumed);
     ASSERT_TRUE(result == DecodeResult::kSuccess);
-    ASSERT_EQ(consumed, (size_t)10); // 6 header_+4body
+    ASSERT_EQ(consumed, (size_t)10); // 6 header + 4 body
 }
 TEST(LengthFieldCodecTest, little_endian_mode) {
     LengthFieldCodec codec(0, 4, 4, false);
     // Frame:4-byte length in little-endian (value=3)+ 3-byte body
-    uint32_t body_len = 3; // alreadylittle-endian on x86
+    uint32_t body_len = 3; // already little-endian on x86
     char frame[7];
     memcpy(frame, &body_len, 4);
     memcpy(frame + 4, "abc", 3);

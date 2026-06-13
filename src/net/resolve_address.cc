@@ -65,7 +65,7 @@ bool connx_split_host_port(const std::string& name, std::string* host, std::stri
             *host = name.substr(0, colon);
             *port = name.substr(colon + 1, name.size() - colon - 1);
         } else {
-            /* 0 or 2+ colons.  Bare hostname or IPv6 litearal. */
+            /* 0 or 2+ colons.  Bare hostname or IPv6 literal. */
             *host = name;
             *port = std::string();
         }

@@ -61,7 +61,7 @@ typedef enum {
  * @return DecodeResult indicating the outcome:
  *         - CONNX_DECODE_SUCCESS:  A complete message was decoded.
  *                                  `consumed` is valid. The caller may call
- *                                  the decode callbak again on the remaining
+ *                                  the decode callback again on the remaining
  *                                  data (if any).
  *         - CONNX_DECODE_NEED_MORE: Insufficient data to complete a message.
  *                                  `consumed` is set to 0. Wait for more data
@@ -215,7 +215,7 @@ CONNX_API void connx_client_options_set_local_address(connx_client_options_t* op
                                                       const char* local_address);
 
 /**
- * @brief Sets TCP_NODEALY option (default: enabled).
+ * @brief Sets TCP_NODELAY option (default: enabled).
  */
 CONNX_API void connx_client_options_set_tcp_nodelay(connx_client_options_t* options, int enabled);
 /**
@@ -345,16 +345,16 @@ CONNX_API void connx_client_get_metrics(const connx_client_t* client, connx_metr
 // ============================================================================
 
 /**
- * @briefExplicitly initlializes the connx library.
+ * @brief Explicitly initializes the connx library.
  *
  * Optional. The library auto-initializes on first client creation.
  */
 CONNX_API void connx_library_init();
 
 /**
- * @briefExplicitly shutdown the connx library.
+ * @brief Explicitly shuts down the connx library.
  *
- * Optional. Callings this while clients exist is undefined behavior.
+ * Optional. Calling this while clients exist is undefined behavior.
  */
 CONNX_API void connx_library_shutdown();
 
@@ -441,7 +441,7 @@ CONNX_API int connx_log_get_min_level();
 CONNX_API void connx_log_set_min_level(int level);
 
 /**
- * @brief Gets a custom log callbak. Pass NULL to restore default (stderr).
+ * @brief Gets a custom log callback. Pass NULL to restore default (stderr).
  */
 CONNX_API void connx_log_set_callback(connx_log_callback_t callback, void* userdata);
 

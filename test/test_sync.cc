@@ -131,7 +131,7 @@ TEST(SyncTest, condvar_no_timeout_returns_0) {
 
 TEST(SyncTest, condvar_timeout_rough_accuracy) {
     // Verify CLOCK_MONOTONIC-based timeout is roughly accurate.
-    // We use a large enough window to avoid flakineSS.
+    // We use a large enough window to avoid flakiness.
     Mutex m;
     ConditionVariable cv;
     int64_t start = GetCurrentMillisec();
@@ -140,7 +140,7 @@ TEST(SyncTest, condvar_timeout_rough_accuracy) {
         cv.Wait(&m, 200);
     }
     int64_t elapsed = GetCurrentMillisec() - start;
-    // Should be at least ~200ms, but allow generousmargin
+    // Should be at least ~200ms, but allow generous margin
     ASSERT_TRUE(elapsed >= 150);
     ASSERT_TRUE(elapsed < 500);
 }

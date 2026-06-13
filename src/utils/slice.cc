@@ -7,7 +7,6 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <algorithm>
 #include "src/utils/atomic.h"
 #include "src/utils/useful.h"
 namespace connx {

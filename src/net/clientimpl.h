@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#ifndef CONNX_SRC_NET_CONNECTIMPL_H_
-#define CONNX_SRC_NET_CONNECTIMPL_H_
+#ifndef CONNX_SRC_NET_CLIENTIMPL_H_
+#define CONNX_SRC_NET_CLIENTIMPL_H_
 
 #include <memory>
 
@@ -49,4 +49,4 @@ private:
 
 } // namespace connx
 
-#endif // CONNX_SRC_NET_CONNECTIMPL_H_
+#endif // CONNX_SRC_NET_CLIENTIMPL_H_
