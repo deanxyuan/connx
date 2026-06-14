@@ -101,6 +101,25 @@ int main() {
 }
 ```
 
+## Initialization
+
+connx supports **auto-initialization**: the global runtime is automatically initialized when the first `Client` is created. You can also explicitly call `LibraryInit()` / `connx_library_init()` during application startup.
+
+### When to Initialize
+
+Initialization **must** happen during the normal running phase of the process — for example, after entering `main()` / `WinMain()`, or during a well-defined startup initialization phase of your application framework.
+
+**Do NOT** create `Client` objects or call initialization functions inside:
+
+- `DllMain`
+- Global object constructors
+- Static object constructors
+- Global variable initialization expressions
+
+### Why
+
+The initialization process calls `WSAStartup` (on Windows) and starts the global poller/worker runtime threads. Windows `DllMain` and static initialization phases have **loader lock** and **cross-translation-unit initialization order** restrictions, making them unsuitable for runtime initialization actions.
+
 ## Logging
 
 connx has its own internal logging for debugging and monitoring. By default, all logs are written to `stderr`. You do **not** need to configure anything to use connx.
