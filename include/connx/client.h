@@ -70,7 +70,7 @@ CONNX_API Client* CreateClient(ClientHandler* handler, const ClientOptions& opts
 CONNX_API void ReleaseClient(Client* cli);
 
 // --- Library Lifecycle ---
-CONNX_API void LibraryInit();
+CONNX_API bool LibraryInit();
 CONNX_API void LibraryShutdown();
 
 /**

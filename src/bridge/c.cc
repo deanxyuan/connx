@@ -278,7 +278,7 @@ void connx_client_get_metrics(const connx_client_t* client, connx_metrics_t* met
 // ============================================================================
 // Library Lifecycle
 // ============================================================================
-void connx_library_init() { connx::LibraryInit(); }
+int connx_library_init() { return connx::LibraryInit() ? 0 : -1; }
 void connx_library_shutdown() { connx::LibraryShutdown(); }
 int connx_runtime_set_worker_threads(size_t worker_threads) {
     return connx::SetRuntimeWorkerThreads(worker_threads) ? 0 : -1;

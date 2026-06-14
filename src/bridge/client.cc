@@ -5,6 +5,7 @@
 
 #include "connx/client.h"
 #include "connx/codec.h"
+#include "src/core/library.h"
 #include "src/net/clientimpl.h"
 #include "src/net/resolve_address.h"
 #include <stdlib.h>
@@ -16,14 +17,25 @@ Codec::~Codec() {}
 
 class ClientAdaptor : public Client {
 private:
+    LibraryInitService library_;
     ClientImpl* impl_;
 
 public:
-    ClientAdaptor() { impl_ = new ClientImpl(); }
-    ~ClientAdaptor() {
-        impl_->Stop();
-        impl_->Unref();
+    ClientAdaptor()
+        : library_()
+        , impl_(nullptr) {
+        if (library_.initialized()) {
+            impl_ = new ClientImpl();
+        }
     }
+    ~ClientAdaptor() {
+        if (impl_ != nullptr) {
+            impl_->Stop();
+            impl_->Unref();
+        }
+    }
+
+    bool initialized() const { return impl_ != nullptr; }
 
     void Init(ClientHandler* handler, const ClientOptions& opts) {
         impl_->SetOptions(opts);
@@ -63,6 +75,10 @@ public:
 Client* CreateClient(ClientHandler* handler, const ClientOptions& opts) {
     if (handler == nullptr || opts.codec == nullptr) return nullptr;
     auto p = new ClientAdaptor();
+    if (!p->initialized()) {
+        delete p;
+        return nullptr;
+    }
     p->Init(handler, opts);
     return p;
 }

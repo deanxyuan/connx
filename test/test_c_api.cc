@@ -132,12 +132,12 @@ TEST(CApiTest, runtime_worker_threads_modes) {
 
 TEST(CApiTest, runtime_worker_threads_rejects_after_init) {
     ASSERT_EQ(connx_runtime_set_worker_threads(2), 0);
-    connx_library_init();
 
+    ASSERT_EQ(connx_library_init(), 0);
     ASSERT_EQ(connx_runtime_set_worker_threads(3), -1);
     ASSERT_EQ(connx_runtime_set_worker_threads_auto(), -1);
-
     connx_library_shutdown();
+
     ASSERT_EQ(connx_runtime_set_worker_threads(0), 0);
 }
 

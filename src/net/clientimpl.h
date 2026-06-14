@@ -9,7 +9,6 @@
 #include <memory>
 
 #include "connx/client.h"
-#include "src/core/library.h"
 #include "src/net/client_connection.h"
 #include "src/utils/refcounted.h"
 #include "src/utils/slice.h"
@@ -17,7 +16,7 @@
 
 namespace connx {
 
-class ClientImpl : public LibraryInitService, public RefCounted<ClientImpl> {
+class ClientImpl : public RefCounted<ClientImpl> {
 public:
     static connx_error Init();
     static void Shutdown();

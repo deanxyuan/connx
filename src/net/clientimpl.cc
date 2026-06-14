@@ -8,9 +8,6 @@
 #include "src/net/runtime.h"
 
 namespace connx {
-namespace {
-internal::LibraryInitializer g_lib_initializer;
-} // namespace
 
 connx_error ClientImpl::Init() { return GlobalRuntime::Instance().Start(); }
 
@@ -34,9 +31,7 @@ bool ClientImpl::IsRuntimeWorkerThreadsAuto() {
 
 ClientImpl::ClientImpl()
     : opts_()
-    , handler_(nullptr) {
-    g_lib_initializer.summon();
-}
+    , handler_(nullptr) {}
 
 ClientImpl::~ClientImpl() { Stop(); }
 

@@ -60,12 +60,12 @@ TEST(CppRuntimeConfig, worker_threads_modes) {
 
 TEST(CppRuntimeConfig, worker_threads_rejects_after_init) {
     ASSERT_TRUE(connx::SetRuntimeWorkerThreads(2));
-    connx::LibraryInit();
 
+    ASSERT_TRUE(connx::LibraryInit());
     ASSERT_TRUE(!connx::SetRuntimeWorkerThreads(3));
     ASSERT_TRUE(!connx::SetRuntimeWorkerThreadsAuto());
-
     connx::LibraryShutdown();
+
     ASSERT_TRUE(connx::SetRuntimeWorkerThreads(0));
 }
 

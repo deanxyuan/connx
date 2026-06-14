@@ -348,8 +348,10 @@ CONNX_API void connx_client_get_metrics(const connx_client_t* client, connx_metr
  * @brief Explicitly initializes the connx library.
  *
  * Optional. The library auto-initializes on first client creation.
+ *
+ * @return 0 on success, -1 on failure.
  */
-CONNX_API void connx_library_init();
+CONNX_API int connx_library_init();
 
 /**
  * @brief Explicitly shuts down the connx library.

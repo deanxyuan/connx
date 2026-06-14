@@ -8,7 +8,7 @@
 #include "src/net/sockaddr.h" // winsock2.h
 #include "src/utils/sync.h"   // windows.h
 #include "src/utils/time.h"
-#include "src/utils/useful.h"
+#include "src/utils/log.h"
 #include "src/net/clientimpl.h"
 
 namespace connx {
@@ -29,15 +29,29 @@ static void do_basic_init() {
     g_initializations = 0;
     connx_time_init();
 }
-void LibraryInit() {
+bool LibraryInit() {
     ConnxOnceInit(&g_basic_init, do_basic_init);
     MutexLock lock(&g_init_mtx);
     if (++g_initializations == 1) {
 #ifdef _WIN32
-        CONNX_ASSERT(winsock_init() == 0 && "winsock init failure.");
+        int rc = winsock_init();
+        if (rc != 0) {
+            --g_initializations;
+            CONNX_LOG_ERROR("connx winsock init failed error=%d", rc);
+            return false;
+        }
 #endif
-        ClientImpl::Init();
+        connx_error err = ClientImpl::Init();
+        if (err != CONNX_ERROR_NONE) {
+#ifdef _WIN32
+            winsock_shutdown();
+#endif
+            --g_initializations;
+            CONNX_LOG_ERROR("connx runtime init failed: %s", err->ToString().c_str());
+            return false;
+        }
     }
+    return true;
 }
 
 void LibraryShutdown() {
