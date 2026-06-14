@@ -17,6 +17,9 @@
 namespace connx {
 namespace {
 
+constexpr size_t kDrainTaskBudget = 64;
+constexpr size_t kParseMessageBudget = 64;
+
 thread_local ClientConnection* t_draining_connection = nullptr;
 
 class ScopedDrainMarker {
@@ -51,6 +54,11 @@ ClientConnection::ClientConnection(ClientHandler* handler, const ClientOptions& 
     , queued_tasks_(0)
     , owner_closing_(false)
     , draining_(false)
+    , drain_yield_requested_(false)
+    , parse_continuation_pending_(false)
+    , deferred_close_pending_(false)
+    , deferred_close_reason_(CloseReason::kRemoteClosed)
+    , deferred_close_desc_()
 #ifdef _WIN32
     , recv_pending_(false)
     , send_pending_(false)
@@ -246,8 +254,18 @@ void ClientConnection::ScheduleDrain(const std::shared_ptr<ClientConnection>& se
     }
 }
 
+void ClientConnection::RescheduleDrain(const std::shared_ptr<ClientConnection>& self) {
+    if (!GlobalRuntime::Instance().workers().Post(worker_index_, [self] { self->Drain(); })) {
+        CONNX_LOG_WARN("connx worker repost failed; drain inline worker=%" PRIuMAX,
+                       static_cast<uintmax_t>(worker_index_));
+        self->Drain();
+    }
+}
+
 void ClientConnection::Drain() {
     ScopedDrainMarker marker(this);
+    size_t tasks_processed = 0;
+    drain_yield_requested_ = false;
 
     for (;;) {
         if (owner_closing_.load(std::memory_order_acquire)) {
@@ -281,6 +299,16 @@ void ClientConnection::Drain() {
         std::function<void()> task = std::move(node->task);
         delete node;
         task();
+        ++tasks_processed;
+        if (drain_yield_requested_ || tasks_processed >= kDrainTaskBudget) {
+            if (owner_closing_.load(std::memory_order_acquire)) {
+                drain_yield_requested_ = false;
+                continue;
+            }
+            drain_yield_requested_ = false;
+            RescheduleDrain(shared_from_this());
+            return;
+        }
     }
 }
 
@@ -548,19 +576,23 @@ void ClientConnection::FinishClose(bool notify, CloseReason reason, const std::s
     }
 }
 
-void ClientConnection::ParseInput() {
+ClientConnection::ParseStatus ClientConnection::ParseInput() {
+    parse_continuation_pending_ = false;
     if (opts_.codec == nullptr || handler_ == nullptr) {
-        return;
+        FinishDeferredClose();
+        return IsConnected() ? ParseStatus::kDone : ParseStatus::kClosed;
     }
 
     size_t total = recv_buffer_.GetBufferLength();
     if (total == 0) {
-        return;
+        FinishDeferredClose();
+        return IsConnected() ? ParseStatus::kDone : ParseStatus::kClosed;
     }
 
     Slice merged = recv_buffer_.Merge();
     size_t offset = 0;
-    while (offset < total) {
+    size_t messages = 0;
+    while (offset < total && messages < kParseMessageBudget) {
         size_t consumed = 0;
         DecodeResult result =
             opts_.codec->Decode(merged.data() + offset, total - offset, &consumed);
@@ -569,19 +601,60 @@ void ClientConnection::ParseInput() {
         }
         if (result == DecodeResult::kError || consumed == 0 || consumed > total - offset) {
             StartClose(CloseReason::kError, "protocol decode error");
-            return;
+            return ParseStatus::kClosed;
         }
 
         handler_->OnMessage(merged.data() + offset, consumed);
         if (!IsConnected()) {
-            return;
+            return ParseStatus::kClosed;
         }
         offset += consumed;
+        ++messages;
     }
 
     if (offset > 0 && !recv_buffer_.MoveHeader(offset)) {
         StartClose(CloseReason::kError, "protocol buffer state error");
+        return ParseStatus::kClosed;
     }
+
+    if (messages >= kParseMessageBudget && recv_buffer_.GetBufferLength() > 0 && IsConnected()) {
+        ScheduleParseContinuation();
+        drain_yield_requested_ = true;
+        return ParseStatus::kYielded;
+    }
+
+    FinishDeferredClose();
+    return IsConnected() ? ParseStatus::kDone : ParseStatus::kClosed;
+}
+
+void ClientConnection::ScheduleParseContinuation() {
+    if (parse_continuation_pending_) {
+        return;
+    }
+    parse_continuation_pending_ = true;
+    std::shared_ptr<ClientConnection> self = shared_from_this();
+    Post([self] {
+        if (self->IsConnected()) {
+            self->ParseInput();
+        }
+    });
+}
+
+void ClientConnection::DeferCloseUntilInputDrained(CloseReason reason, const std::string& desc) {
+    deferred_close_pending_ = true;
+    deferred_close_reason_ = reason;
+    deferred_close_desc_ = desc;
+}
+
+void ClientConnection::FinishDeferredClose() {
+    if (!deferred_close_pending_) {
+        return;
+    }
+    CloseReason reason = deferred_close_reason_;
+    std::string desc = deferred_close_desc_;
+    deferred_close_pending_ = false;
+    deferred_close_desc_.clear();
+    StartClose(reason, desc);
 }
 
 void ClientConnection::UpdateWriteInterest() {
@@ -601,6 +674,10 @@ void ClientConnection::ResetAfterClose() {
     recv_buffer_.ClearBuffer();
     send_buffer_.ClearBuffer();
     pending_bytes_.store(0, std::memory_order_relaxed);
+    drain_yield_requested_ = false;
+    parse_continuation_pending_ = false;
+    deferred_close_pending_ = false;
+    deferred_close_desc_.clear();
     PlatformResetIoState();
 }
 

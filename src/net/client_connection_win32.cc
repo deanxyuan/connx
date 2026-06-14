@@ -48,18 +48,21 @@ bool ApplyTcpOptions(SocketHandle fd, const TcpOptions& tcp, std::string* error)
         }
     }
     if (tcp.send_buffer_size > 0) {
-        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&tcp.send_buffer_size),
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
+                   reinterpret_cast<const char*>(&tcp.send_buffer_size),
                    sizeof(tcp.send_buffer_size));
     }
     if (tcp.recv_buffer_size > 0) {
-        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&tcp.recv_buffer_size),
+        setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
+                   reinterpret_cast<const char*>(&tcp.recv_buffer_size),
                    sizeof(tcp.recv_buffer_size));
     }
     if (tcp.linger_sec >= 0) {
         struct linger ling;
         ling.l_onoff = (tcp.linger_sec > 0) ? 1 : 0;
         ling.l_linger = static_cast<u_short>(tcp.linger_sec);
-        setsockopt(fd, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char*>(&ling), sizeof(ling));
+        setsockopt(fd, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char*>(&ling),
+                   sizeof(ling));
     }
     return true;
 }
@@ -81,8 +84,8 @@ void MakeWildcardAddress(int family, connx_resolved_address* out) {
 
 } // namespace
 
-bool ClientConnection::PlatformOpenSocket(const connx_resolved_address& addr, SocketHandle* out_fd,
-                                          std::string* error) {
+bool ClientConnection::PlatformOpenSocket(const connx_resolved_address& addr,
+                                          SocketHandle* out_fd, std::string* error) {
     const connx_sockaddr* sa = reinterpret_cast<const connx_sockaddr*>(addr.addr);
     SocketHandle fd = WSASocket(sa->sa_family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0,
                                 WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
@@ -125,8 +128,8 @@ int ClientConnection::PlatformConnect(SocketHandle fd, const connx_resolved_addr
     }
 
     if (!GlobalRuntime::Instance().poller().StartConnect(
-            fd, id_, reinterpret_cast<const connx_sockaddr*>(addr.addr), static_cast<int>(addr.len),
-            error)) {
+            fd, id_, reinterpret_cast<const connx_sockaddr*>(addr.addr),
+            static_cast<int>(addr.len), error)) {
         return -1;
     }
     return 1;
@@ -196,11 +199,19 @@ void ClientConnection::HandleRecvCompletion(const PollEvent& ev) {
         return;
     }
     if (ev.bytes_transferred == 0) {
+        if (recv_buffer_.GetBufferLength() > 0) {
+            DeferCloseUntilInputDrained(CloseReason::kRemoteClosed, "");
+            if (!parse_continuation_pending_) {
+                ParseInput();
+            }
+            return;
+        }
         StartClose(CloseReason::kRemoteClosed, "");
         return;
     }
 
-    std::shared_ptr<WinIoRequest> req = std::static_pointer_cast<WinIoRequest>(ev.data);
+    std::shared_ptr<WinIoRequest> req =
+        std::static_pointer_cast<WinIoRequest>(ev.data);
     if (!req || req->buffer.size() < ev.bytes_transferred) {
         StartClose(CloseReason::kError, "invalid recv completion");
         return;
@@ -209,8 +220,7 @@ void ClientConnection::HandleRecvCompletion(const PollEvent& ev) {
     bytes_received_.fetch_add(static_cast<uint64_t>(ev.bytes_transferred),
                               std::memory_order_relaxed);
     recv_buffer_.AddSlice(Slice(req->buffer.data(), ev.bytes_transferred));
-    ParseInput();
-    if (!IsConnected()) {
+    if (ParseInput() == ParseStatus::kClosed) {
         return;
     }
 

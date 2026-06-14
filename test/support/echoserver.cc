@@ -27,6 +27,7 @@ typedef int SOCKET;
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <thread>
 
 #define BUF_SIZE     4096
@@ -39,6 +40,7 @@ namespace {
 std::atomic<bool> running_{false};
 std::thread thread_;
 int port_ = -1;
+std::string burst_payload_;
 
 #ifdef _WIN32
 SOCKET listen_fd_ = INVALID_SOCKET;
@@ -141,9 +143,55 @@ void RunEchoLoop() {
     }
 }
 
-} // namespace
+void RunBurstCloseLoop() {
+    SOCKET cli_fd = INVALID_SOCKET;
+    while (running_) {
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(listen_fd_, &read_fds);
 
-int StartEchoServer(int port) {
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = SELECT_TO_MS * 1000;
+
+        int nready = select((int)listen_fd_ + 1, &read_fds, NULL, NULL, &tv);
+        if (nready < 0) {
+#ifndef _WIN32
+            if (errno == EINTR) continue;
+#endif
+            running_ = false;
+            return;
+        }
+        if (nready == 0 || !FD_ISSET(listen_fd_, &read_fds)) {
+            continue;
+        }
+
+        struct sockaddr_in cli_addr;
+        socklen_t cli_len = sizeof(cli_addr);
+        cli_fd = accept(listen_fd_, (struct sockaddr*)&cli_addr, &cli_len);
+        break;
+    }
+
+    if (cli_fd == INVALID_SOCKET) {
+        running_ = false;
+        return;
+    }
+
+    size_t sent = 0;
+    while (sent < burst_payload_.size()) {
+        int r = (int)send(cli_fd, burst_payload_.data() + sent,
+                          (int)(burst_payload_.size() - sent), 0);
+        if (r <= 0) {
+            break;
+        }
+        sent += static_cast<size_t>(r);
+    }
+
+    CLOSE_SOCKET(cli_fd);
+    running_ = false;
+}
+
+int StartServerCommon(int port) {
 #ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
@@ -216,7 +264,26 @@ int StartEchoServer(int port) {
 
     listen_fd_ = listen_fd;
     running_ = true;
+    return port_;
+}
+
+} // namespace
+
+int StartEchoServer(int port) {
+    if (StartServerCommon(port) < 0) {
+        return -1;
+    }
     thread_ = std::thread(RunEchoLoop);
+    return port_;
+}
+
+int StartBurstCloseServer(const std::string& payload, int port) {
+    burst_payload_ = payload;
+    if (StartServerCommon(port) < 0) {
+        burst_payload_.clear();
+        return -1;
+    }
+    thread_ = std::thread(RunBurstCloseLoop);
     return port_;
 }
 
@@ -230,6 +297,7 @@ void StopEchoServer() {
     CLOSE_SOCKET(listen_fd_);
     listen_fd_ = INVALID_SOCKET;
     port_ = -1;
+    burst_payload_.clear();
 
 #ifdef _WIN32
     if (wsa_ready_) {

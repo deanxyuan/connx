@@ -49,6 +49,7 @@ private:
         kError,
         kRelease
     };
+    enum class ParseStatus { kDone, kYielded, kClosed };
 
     struct TaskNode : public MultiProducerSingleConsumerQueue::Node {
         explicit TaskNode(const std::function<void()>& in_task)
@@ -58,13 +59,13 @@ private:
 
     void Post(const std::function<void()>& task);
     void ScheduleDrain(const std::shared_ptr<ClientConnection>& self);
+    void RescheduleDrain(const std::shared_ptr<ClientConnection>& self);
     void Drain();
     TaskNode* PopAvailableTaskNode();
     void DrainTaskQueue();
     void NotifyIdle();
 
     void ConnectResolved(const connx_resolved_address& addr);
-    bool OpenSocket(const connx_resolved_address& addr, int* out_fd, std::string* error);
     void HandlePollEvent(const PollEvent& ev);
     void HandleTimerEvent(const TimerEvent& ev);
     void HandleConnected();
@@ -75,7 +76,10 @@ private:
     void HandleSendCompletion(const PollEvent& ev);
     void StartClose(CloseReason reason, const std::string& desc);
     void FinishClose(bool notify, CloseReason reason, const std::string& desc);
-    void ParseInput();
+    ParseStatus ParseInput();
+    void ScheduleParseContinuation();
+    void DeferCloseUntilInputDrained(CloseReason reason, const std::string& desc);
+    void FinishDeferredClose();
     void UpdateWriteInterest();
     void CloseFd();
     void ResetAfterClose();
@@ -113,6 +117,11 @@ private:
     std::atomic<size_t> queued_tasks_;
     std::atomic<bool> owner_closing_;
     std::atomic<bool> draining_;
+    bool drain_yield_requested_;
+    bool parse_continuation_pending_;
+    bool deferred_close_pending_;
+    CloseReason deferred_close_reason_;
+    std::string deferred_close_desc_;
     std::condition_variable idle_cv_;
     std::mutex idle_mtx_;
 

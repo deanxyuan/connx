@@ -78,10 +78,12 @@ bool ApplyTcpOptions(SocketHandle fd, const TcpOptions& tcp, std::string* error)
     }
 #endif
     if (tcp.send_buffer_size > 0) {
-        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &tcp.send_buffer_size, sizeof(tcp.send_buffer_size));
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &tcp.send_buffer_size,
+                   sizeof(tcp.send_buffer_size));
     }
     if (tcp.recv_buffer_size > 0) {
-        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &tcp.recv_buffer_size, sizeof(tcp.recv_buffer_size));
+        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &tcp.recv_buffer_size,
+                   sizeof(tcp.recv_buffer_size));
     }
     if (tcp.linger_sec >= 0) {
         struct linger ling;
@@ -102,8 +104,8 @@ ssize_t SendNoSignal(SocketHandle fd, const char* data, size_t len) {
 
 } // namespace
 
-bool ClientConnection::PlatformOpenSocket(const connx_resolved_address& addr, SocketHandle* out_fd,
-                                          std::string* error) {
+bool ClientConnection::PlatformOpenSocket(const connx_resolved_address& addr,
+                                          SocketHandle* out_fd, std::string* error) {
     const connx_sockaddr* sa = reinterpret_cast<const connx_sockaddr*>(addr.addr);
     SocketHandle fd = socket(sa->sa_family, SOCK_STREAM, 0);
     if (!IsValidSocketHandle(fd)) {
@@ -219,8 +221,12 @@ void ClientConnection::PlatformHandleReadable() {
         recv_buffer_.AddSlice(Slice(recv_cache_, static_cast<size_t>(n)));
     }
     if (recv_buffer_.GetBufferLength() > 0) {
-        ParseInput();
-        if (!IsConnected()) {
+        ParseStatus parse_status = ParseInput();
+        if (parse_status == ParseStatus::kClosed) {
+            return;
+        }
+        if (parse_status == ParseStatus::kYielded && should_close) {
+            DeferCloseUntilInputDrained(close_reason, close_desc);
             return;
         }
     }

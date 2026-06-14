@@ -111,6 +111,7 @@ public:
             client = client_;
             client_ = nullptr;
         }
+
         if (client != nullptr) {
             connx::ReleaseClient(client);
         }
@@ -278,8 +279,7 @@ TEST(IntegrationTest, multiple_clients) {
 }
 
 // ============================================================================
-// 5. Concurrent sends on one client should be serialized through the
-//    connection queue
+// 5. Concurrent sends on one client should be serialized through the connection queue
 // ============================================================================
 TEST(IntegrationTest, concurrent_send_on_single_client) {
     int port = test::StartEchoServer(0);
@@ -300,9 +300,9 @@ TEST(IntegrationTest, concurrent_send_on_single_client) {
     const int kProducers = 8;
     const int kMessagesPerProducer = 64;
     const int kTotalMessages = kProducers * kMessagesPerProducer;
-
     std::atomic<int> failed_sends{0};
     std::vector<std::thread> senders;
+
     for (int producer = 0; producer < kProducers; ++producer) {
         senders.push_back(std::thread([producer, kMessagesPerProducer, cli, &failed_sends]() {
             for (int i = 0; i < kMessagesPerProducer; ++i) {
@@ -314,9 +314,11 @@ TEST(IntegrationTest, concurrent_send_on_single_client) {
             }
         }));
     }
+
     for (size_t i = 0; i < senders.size(); ++i) {
         senders[i].join();
     }
+
     ASSERT_EQ(failed_sends.load(std::memory_order_relaxed), 0);
     ASSERT_TRUE(handler.WaitForMessage(kTotalMessages, 8000));
     ASSERT_EQ(handler.msg_count_, kTotalMessages);
@@ -386,6 +388,42 @@ TEST(IntegrationTest, release_client_inside_message_callback) {
     ASSERT_TRUE(handler.WaitForRelease(3000));
     ASSERT_EQ(handler.received_, "release-in-callback\n");
 
+    test::StopEchoServer();
+}
+
+// ============================================================================
+// 8. Buffered frames must survive parser yielding when peer closes immediately
+// ============================================================================
+TEST(IntegrationTest, burst_close_drains_buffered_frames_after_parse_yield) {
+    const int kMessages = 160;
+    std::string payload;
+    for (int i = 0; i < kMessages; ++i) {
+        payload.append("burst-");
+        payload.append(std::to_string(i));
+        payload.push_back('\n');
+    }
+
+    int port = test::StartBurstCloseServer(payload, 0);
+    ASSERT_TRUE(port > 0);
+
+    SyncHandler handler;
+    connx::ClientOptions opts;
+    opts.codec = new connx::DelimiterCodec('\n');
+
+    connx::Client* cli = connx::CreateClient(&handler, opts);
+    ASSERT_TRUE(cli != nullptr);
+
+    std::string addr = "127.0.0.1:" + std::to_string(port);
+    ASSERT_TRUE(cli->Connect(addr.c_str()));
+    ASSERT_TRUE(handler.WaitForConnect());
+    ASSERT_TRUE(handler.connected_);
+
+    ASSERT_TRUE(handler.WaitForMessage(kMessages, 5000));
+    ASSERT_EQ(handler.msg_count_, kMessages);
+    ASSERT_EQ(handler.received_, payload);
+    ASSERT_TRUE(handler.WaitForClosed(5000));
+
+    connx::ReleaseClient(cli);
     test::StopEchoServer();
 }
 
